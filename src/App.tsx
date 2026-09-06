@@ -30,6 +30,7 @@ import {
   InvitationCodesView,
   AttendanceQueriesView
 } from './views'
+import { MailCenter } from './components/MailCenter'
 
 const roleCopy: Record<Role, { label: string; detail: string }> = {
   student: { label: 'Student', detail: 'Mark and track attendance' },
@@ -368,6 +369,7 @@ function Workspace() {
   else if (role === 'admin' && view === 'settings') content = <SettingsView />
   else if (role === 'admin' && view === 'invites') content = <InvitationCodesView />
   else if (view === 'queries') content = <AttendanceQueriesView />
+  else if (view === 'mail') content = <MailCenter />
   else if (role === 'faculty') content = <FacultyDashboard go={go} />
   else if (role === 'admin') content = <AdminDashboard go={go} />
   else content = <StudentDashboard go={go} />

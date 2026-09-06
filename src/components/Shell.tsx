@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 import type { LucideIcon } from 'lucide-react'
-import { Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, ClipboardCheck, Grid2X2, History, KeyRound, LifeBuoy, LogOut, Menu, QrCode, Server, Settings, ShieldCheck, Smartphone, Users, X, Database } from 'lucide-react'
+import { Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, ClipboardCheck, Grid2X2, History, Inbox, KeyRound, LifeBuoy, LogOut, Menu, QrCode, Server, Settings, ShieldCheck, Smartphone, Users, X, Database } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { Role } from '../types'
 import { useAppStore } from '../store'
@@ -8,12 +8,12 @@ import { Initials, Logo, Button } from './ui'
 import { getLocalServerUrl, setLocalServerUrl } from '../lib/apiClient'
 import { UpdateBanner } from './UpdateBanner'
 
-export type ViewKey = 'home' | 'mark' | 'history' | 'classes' | 'session' | 'people' | 'passwords' | 'review' | 'settings' | 'invites' | 'profile' | 'queries'
+export type ViewKey = 'home' | 'mark' | 'history' | 'classes' | 'session' | 'people' | 'passwords' | 'review' | 'settings' | 'invites' | 'profile' | 'queries' | 'mail'
 type Nav = { key: ViewKey; label: string; icon: LucideIcon }
 const navByRole: Record<Role, Nav[]> = {
-  student: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'mark', label: 'Mark attendance', icon: QrCode }, { key: 'classes', label: 'My classes', icon: BookOpen }, { key: 'queries', label: 'Attendance help', icon: LifeBuoy }, { key: 'history', label: 'History', icon: History }],
-  faculty: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'session', label: 'Live session', icon: QrCode }, { key: 'classes', label: 'My classes', icon: BookOpen }, { key: 'history', label: 'Attendance', icon: ClipboardCheck }],
-  admin: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'people', label: 'People', icon: Users }, { key: 'passwords', label: 'Password requests', icon: KeyRound }, { key: 'classes', label: 'Classes', icon: CalendarDays }, { key: 'review', label: 'Review queue', icon: ShieldCheck }, { key: 'queries', label: 'Attendance queries', icon: LifeBuoy }, { key: 'history', label: 'Records', icon: ClipboardCheck }, { key: 'settings', label: 'Settings', icon: Settings }]
+  student: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'mark', label: 'Mark attendance', icon: QrCode }, { key: 'classes', label: 'My classes', icon: BookOpen }, { key: 'queries', label: 'Attendance help', icon: LifeBuoy }, { key: 'mail', label: 'Mail Center', icon: Inbox }, { key: 'history', label: 'History', icon: History }],
+  faculty: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'session', label: 'Live session', icon: QrCode }, { key: 'classes', label: 'My classes', icon: BookOpen }, { key: 'mail', label: 'Mail Center', icon: Inbox }, { key: 'history', label: 'Attendance', icon: ClipboardCheck }],
+  admin: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'people', label: 'People', icon: Users }, { key: 'passwords', label: 'Password requests', icon: KeyRound }, { key: 'classes', label: 'Classes', icon: CalendarDays }, { key: 'review', label: 'Review queue', icon: ShieldCheck }, { key: 'queries', label: 'Attendance queries', icon: LifeBuoy }, { key: 'mail', label: 'Mail Center', icon: Inbox }, { key: 'history', label: 'Records', icon: ClipboardCheck }, { key: 'settings', label: 'Settings', icon: Settings }]
 }
 
 export function Shell({ view, setView, children }: { view: ViewKey; setView: (view: ViewKey) => void; children: ReactNode }) {
@@ -85,7 +85,7 @@ export function Shell({ view, setView, children }: { view: ViewKey; setView: (vi
           </p>
           <input
             type="text"
-            className="input"
+            className="text-input"
             value={serverInput}
             onChange={(e) => setServerInput(e.target.value)}
             placeholder="http://localhost:3001"

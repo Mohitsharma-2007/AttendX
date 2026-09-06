@@ -38,6 +38,14 @@
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .camera-modal { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(6,13,11,.82); }
+
+/* Modal dialogs (server connection, OTP, confirmations) */
+.modal-backdrop { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(6,13,11,.72); backdrop-filter: blur(3px); animation: fadeIn .18s ease; }
+.modal-content { width: min(480px, 100%); max-height: min(86vh, 720px); overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 24px 60px rgba(6,13,11,.35); animation: modalIn .2s ease; }
+.modal-content h3 { font-family: 'Manrope', var(--ink); }
+@keyframes modalIn { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 640px) { .modal-backdrop { padding: 0; align-items: end; } .modal-content { border-radius: 12px 12px 0 0; max-height: 92vh; } }
 .camera-surface { position: relative; display: flex; width: min(720px, 100%); max-height: calc(100vh - 36px); flex-direction: column; gap: 12px; align-items: center; padding: 12px; border-radius: 7px; background: #0f1715; }
 .camera-surface video { width: 100%; max-height: calc(100vh - 125px); border-radius: 5px; object-fit: contain; background: #050807; }
 .camera-close { position: absolute; z-index: 2; top: 18px; right: 18px; color: white; background: rgba(0,0,0,.5); }

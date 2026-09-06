@@ -400,6 +400,17 @@ export async function handleAdminResetPassword(req: Request, res: Response) {
     const hash = hashPassword(String(finalPassword));
     await execute('UPDATE profiles SET password_hash = ?, must_change_password = 1 WHERE id = ?', [hash, userId]);
 
+    // Email the temporary password to the user (Gmail SMTP)
+    try {
+      const target = await getOne('SELECT email, full_name FROM profiles WHERE id = ?', [userId]);
+      if (target) {
+        const { sendAdminPasswordResetEmail } = await import('./mailer.js');
+        await sendAdminPasswordResetEmail(target.email, target.full_name || 'User', String(finalPassword));
+      }
+    } catch (mailError) {
+      console.warn('Admin reset email failed:', (mailError as Error).message);
+    }
+
     if (requestId) {
       await execute('UPDATE password_resets SET status = ?, admin_note = ? WHERE id = ?',
         ['resolved', 'Reset completed from admin dashboard', requestId]);

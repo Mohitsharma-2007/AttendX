@@ -160,3 +160,55 @@ export async function notifyAdminOfQuery(
   `);
   return dispatch(ADMIN_NOTIFY_EMAIL, `[AttendX] New query ${trackingId} from ${studentName}`, html, `New attendance query ${trackingId} from ${studentName}: ${message}`);
 }
+
+/** Welcome/onboarding mail for brand-new accounts. */
+export async function sendOnboardingEmail(to: string, name: string, role: string): Promise<boolean> {
+  const html = emailShell('Welcome to AttendX', `
+    <h1>Welcome to AttendX, ${name}!</h1>
+    <p>Your <strong>${role}</strong> account has been created successfully. AttendX is your institution's attendance infrastructure — mark sessions with QR codes, track your record live, and raise queries with full request-number tracking.</p>
+    <div class="row"><em>Account</em><strong>${to}</strong></div>
+    <div class="row"><em>Role</em><strong>${role}</strong></div>
+    <p style="margin-top:18px;">If you did not create this account, contact your institution's administrator immediately.</p>
+  `);
+  return dispatch(to, '[AttendX] Welcome to AttendX — your account is ready', html, `Welcome to AttendX, ${name}! Your ${role} account is ready.`);
+}
+
+/** Account activated by an administrator. */
+export async function sendAccountActivatedEmail(to: string, name: string): Promise<boolean> {
+  const html = emailShell('Account activated', `
+    <h1>Your account has been activated</h1>
+    <p>Dear <strong>${name}</strong>,</p>
+    <p>Good news — your AttendX account has been <strong style="color:#34d399;">activated</strong> by the administration. You can now sign in and use every feature available to your role.</p>
+    <div class="row"><em>Account</em><strong>${to}</strong></div>
+    <p style="margin-top:18px;">Welcome aboard!</p>
+  `);
+  return dispatch(to, '[AttendX] Your account has been activated', html, `Dear ${name}, your AttendX account has been activated. You can sign in now.`);
+}
+
+/** Account deactivated by an administrator. */
+export async function sendAccountDeactivatedEmail(to: string, name: string, reason: string): Promise<boolean> {
+  const html = emailShell('Account deactivated', `
+    <h1>Your account has been deactivated</h1>
+    <p>Dear <strong>${name}</strong>,</p>
+    <p>Your AttendX account has been <strong style="color:#f87171;">deactivated</strong> by the administration. Sign-in is disabled until an administrator reactivates it.</p>
+    <div class="row"><em>Account</em><strong>${to}</strong></div>
+    ${reason ? `<div class="row"><em>Reason</em><strong>${reason}</strong></div>` : ''}
+    <p style="margin-top:18px;">If you believe this is a mistake, contact your institution's administrator.</p>
+  `);
+  return dispatch(to, '[AttendX] Your account has been deactivated', html, `Dear ${name}, your AttendX account has been deactivated. ${reason}`);
+}
+
+/** Temporary password issued by an administrator. */
+export async function sendAdminPasswordResetEmail(to: string, name: string, tempPassword: string): Promise<boolean> {
+  const html = emailShell('Password reset by administration', `
+    <h1>Your password has been reset</h1>
+    <p>Dear <strong>${name}</strong>,</p>
+    <p>An administrator reset your AttendX password. Use the temporary password below to sign in — you will be asked to choose a new private password immediately after.</p>
+    <div class="highlight">
+      <p style="margin:0 0 6px;font-size:12px;color:#64748b;">TEMPORARY PASSWORD</p>
+      <div class="code" style="letter-spacing:1px;font-size:20px;">${tempPassword}</div>
+    </div>
+    <p style="font-size:13px;">Never share this password. If you did not expect this reset, contact your administrator.</p>
+  `);
+  return dispatch(to, '[AttendX] Your password was reset — temporary password inside', html, `Your AttendX password was reset. Temporary password: ${tempPassword}`);
+}

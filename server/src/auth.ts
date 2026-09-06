@@ -215,6 +215,14 @@ export async function handleSignup(req: Request, res: Response) {
       }
     }
 
+    // New-user onboarding welcome mail (Gmail SMTP)
+    try {
+      const { sendOnboardingEmail } = await import('./mailer.js');
+      await sendOnboardingEmail(cleanEmail, fullName, role);
+    } catch (mailError) {
+      console.warn('Onboarding email failed:', (mailError as Error).message);
+    }
+
     res.status(201).json({
       success: true,
       message: role === 'faculty' ? 'Faculty registration submitted for administrator approval' : 'Account created successfully',

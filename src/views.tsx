@@ -2574,10 +2574,21 @@ export function PeopleView() {
   );
   const toggle = async (person: any) => {
     setBusy(person.id);
-    await supabase
-      .from("profiles")
-      .update({ is_active: !person.is_active })
-      .eq("id", person.id);
+    // Dedicated endpoint fires the activation/deactivation mail automatically.
+    try {
+      const token = localStorage.getItem("attendx_auth_token") || "";
+      await fetch(`${getLocalServerUrl()}/api/admin/users/${person.id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ isActive: !person.is_active }),
+      });
+    } catch {
+      // fall back to the generic data update if the endpoint is unreachable
+      await supabase
+        .from("profiles")
+        .update({ is_active: !person.is_active })
+        .eq("id", person.id);
+    }
     setBusy("");
     result.reload();
   };

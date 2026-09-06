@@ -135,6 +135,17 @@ app.get('/api/app/latest', handleAppLatest);
 app.get('/api/admin/mass-email/recipients', authenticate, handleMassEmailRecipients);
 app.post('/api/admin/mass-email', authenticate, handleMassEmail);
 
+// Mail Center — every institutional mail event with tracking
+import { handleNoticeCatalog, handleRaiseNotice, handleListNotices, handleResolveNotice } from './notices.js';
+app.get('/api/notices/catalog', authenticate, handleNoticeCatalog);
+app.post('/api/notices', authenticate, handleRaiseNotice);
+app.get('/api/notices', authenticate, handleListNotices);
+app.patch('/api/notices/:id', authenticate, handleResolveNotice);
+
+// Admin account activation / deactivation with automatic mail
+import { handleSetUserStatus } from './userStatus.js';
+app.patch('/api/admin/users/:id/status', authenticate, handleSetUserStatus);
+
 // PostgREST generic data endpoints (matching both /api/data/:table and Supabase /rest/v1/:table)
 // GET is accessible with optional auth (demo/offline mode needs unauthenticated reads)
 app.get(['/api/data/:table', '/rest/v1/:table'], authenticateOptional, handleQuery);
