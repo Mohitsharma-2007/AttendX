@@ -1,35 +1,19 @@
 import { useEffect, useState } from 'react'
-import { Capacitor } from '@capacitor/core'
 import { AlertTriangle, ArrowLeft, ArrowRight, Camera, CheckCircle2, Clock, IdCard, KeyRound, LoaderCircle, LockKeyhole, MapPin, QrCode, ScanLine, ShieldAlert, ShieldCheck, Smartphone, Users } from 'lucide-react'
 import { Shell, type ViewKey } from './components/Shell'
 import { Button, Logo } from './components/ui'
 import { useAppStore } from './store'
 import type { Role } from './types'
-import { supabase } from './lib/supabase'
+import { apiClient, getLocalServerUrl } from './lib/apiClient'
 import { checkDeviceIntegrity, openDeveloperSettings } from './lib/deviceIntegrity'
+
+const supabase = apiClient
 import { CameraCaptureModal, captureNativePhoto, type LivePhoto } from './components/CameraCapture'
 import { extractJoinToken, QrScannerModal } from './components/QrScanner'
 import { OtpModal } from './components/OtpModal'
+import { isNativeApp } from './lib/platform'
+import { UpdateBanner } from './components/UpdateBanner'
 
-/**
- * Robust native platform detection.
- * Capacitor.isNativePlatform() can return false in some WebView configurations.
- * We also check for the Capacitor bridge indicator in the user agent or URL scheme.
- */
-function isRunningInNativeApp(): boolean {
-  if (Capacitor.isNativePlatform()) return true;
-  if (typeof window === 'undefined') return false;
-  // Check for Capacitor-injected bridge
-  if ((window as any).Capacitor?.isNativePlatform?.()) return true;
-  // Check user agent for Android WebView indicators
-  const ua = navigator.userAgent || '';
-  if (ua.includes('CapacitorBridge') || ua.includes('AttendX')) return true;
-  // Check if we're running in a WebView (no location bar, etc.)
-  if (window.matchMedia?.('(display-mode: standalone)')?.matches) return true;
-  // Check for Capacitor plugin availability
-  if ((window as any).Capacitor?.Plugins) return true;
-  return false;
-}
 import {
   AdminDashboard,
   FacultyDashboard,
@@ -43,7 +27,8 @@ import {
   SettingsView,
   StudentClasses,
   StudentDashboard,
-  InvitationCodesView
+  InvitationCodesView,
+  AttendanceQueriesView
 } from './views'
 
 const roleCopy: Record<Role, { label: string; detail: string }> = {
@@ -66,7 +51,6 @@ function Signup({ onBack }: { onBack: () => void }) {
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setError('')
     if (!identity || !front || !back) { setError('Capture your portrait and both sides of your ID card.'); return }
-    if (!supabase) { setError('Supabase is not configured.'); return }
     setLoading(true)
     const { error: signupError } = await supabase.functions.invoke('signup', { body: {
       ...form, role, inviteToken: extractJoinToken(form.inviteToken),
@@ -99,6 +83,7 @@ function CaptureTile({ title, icon, photo, onClick }: { title: string; icon: Rea
 
 function Login() {
   const signIn = useAppStore((state) => state.signIn)
+  const [nativeApp, setNativeApp] = useState(isNativeApp)
   const [role, setRole] = useState<Role>('student')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -108,6 +93,10 @@ function Login() {
   const [resetMode, setResetMode] = useState(false)
   const [resetSent, setResetSent] = useState(false)
   const [signupMode, setSignupMode] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [resetError, setResetError] = useState('')
+  const [resetting, setResetting] = useState(false)
 
   const selectRole = (nextRole: Role) => {
     setRole(nextRole)
@@ -117,6 +106,13 @@ function Login() {
 
   const [showOtpModal, setShowOtpModal] = useState(false)
   const [otpPurpose, setOtpPurpose] = useState<'login'|'password_reset'>('login')
+  const [verifiedOtpCode, setVerifiedOtpCode] = useState('')
+
+  // A few Android WebViews expose the Capacitor bridge just after the first
+  // paint. Re-check once so the APK link is never retained in the native app.
+  useEffect(() => {
+    setNativeApp(isNativeApp())
+  }, [])
 
   const submitLogin = async (event: React.FormEvent) => {
     event.preventDefault(); setLoading(true); setError('')
@@ -129,7 +125,7 @@ function Login() {
     event.preventDefault(); setLoading(true); setError('')
     try {
       // Dispatch OTP via Gmail SMTP
-      const res = await fetch(`${(await import('./lib/supabase')).getLocalServerUrl()}/api/auth/send-otp`, {
+      const res = await fetch(`${getLocalServerUrl()}/api/auth/send-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, purpose: 'password_reset' }),
@@ -142,10 +138,33 @@ function Login() {
         setShowOtpModal(true);
       }
     } catch {
-      // Fallback
-      setResetSent(true);
+      setError('Could not reach the AttendX server. Please try again.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  const completeReset = async () => {
+    setResetError('')
+    if (newPassword.length < 12) { setResetError('Use at least 12 characters.'); return }
+    if (newPassword !== confirmPassword) { setResetError('Passwords do not match.'); return }
+    setResetting(true)
+    try {
+      const res = await fetch(`${getLocalServerUrl()}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code: verifiedOtpCode, newPassword }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setResetError(data.error || 'Could not update the password')
+      } else {
+        setResetSent(true)
+      }
+    } catch (err) {
+      setResetError((err as Error).message)
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -164,7 +183,7 @@ function Login() {
           <span><MapPin size={18}/><strong>Live location</strong><small>Server geofence</small></span>
           <span><ShieldCheck size={18}/><strong>Device trust</strong><small>Android integrity</small></span>
         </div>
-        {!isRunningInNativeApp() && (
+        {!nativeApp && (
           <div style={{ marginTop: '1.25rem' }}>
             <a
               href="https://github.com/Mohitsharma-2007/AttendX/releases/latest/download/AttendX.apk"
@@ -195,7 +214,7 @@ function Login() {
     <section className="login-form-side">
       <div className="login-mobile-logo" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
         <Logo />
-        {!isRunningInNativeApp() && (
+        {!nativeApp && (
           <a
             href="https://github.com/Mohitsharma-2007/AttendX/releases/latest/download/AttendX.apk"
             target="_blank"
@@ -243,11 +262,30 @@ function Login() {
       email={email}
       purpose={otpPurpose}
       onClose={() => setShowOtpModal(false)}
-      onSuccess={() => {
-        setShowOtpModal(false);
-        setResetSent(true);
+      onVerified={(code) => {
+        setVerifiedOtpCode(code)
+        setShowOtpModal(false)
       }}
     />
+
+    {verifiedOtpCode && !resetSent && (
+      <div className="modal-backdrop" style={{ zIndex: 1000 }}>
+        <div className="modal-content" style={{ maxWidth: '420px', padding: '2rem', background: '#131d1b', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '16px', color: '#f1f5f9' }}>
+          <h3 style={{ margin: '0 0 0.5rem', fontSize: '1.2rem', color: '#fff' }}>Set a new password</h3>
+          <p style={{ fontSize: '0.88rem', color: '#94a3b8', margin: '0 0 1.25rem' }}>Identity verified for <strong style={{ color: '#34d399' }}>{email}</strong>. Choose a new password of at least 12 characters.</p>
+          {resetError && <div className="login-error" style={{ marginBottom: '1rem' }}><AlertTriangle size={16} />{resetError}</div>}
+          <label className="field-label" style={{ color: '#cbd5e1' }}>New password
+            <input className="text-input" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={12} required />
+          </label>
+          <label className="field-label" style={{ color: '#cbd5e1' }}>Confirm password
+            <input className="text-input" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} minLength={12} required />
+          </label>
+          <button className="button button-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }} onClick={completeReset} disabled={resetting}>
+            {resetting ? 'Updating…' : 'Update password'}
+          </button>
+        </div>
+      </div>
+    )}
   </main>
 }
 
@@ -261,7 +299,6 @@ function PasswordChangeRequired() {
     event.preventDefault(); setError('')
     if (password.length < 12) { setError('Use at least 12 characters.'); return }
     if (password !== confirm) { setError('Passwords do not match.'); return }
-    if (!supabase) { setMustChangePassword(false); return }
     setLoading(true)
     const { error: functionError } = await supabase.functions.invoke('change-own-password', { body: { password } })
     if (functionError) setError(functionError.message); else setMustChangePassword(false)
@@ -292,7 +329,6 @@ function FacultyCodeEntry() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setLoading(true)
-    if (!supabase) return
     const { error: fnError } = await supabase.functions.invoke('verify-faculty-code', { body: { inviteToken: code } })
     if (fnError) setError(fnError.message)
     else await bootstrap() // Refresh profile
@@ -331,6 +367,7 @@ function Workspace() {
   else if (role === 'admin' && view === 'review') content = <ReviewQueue />
   else if (role === 'admin' && view === 'settings') content = <SettingsView />
   else if (role === 'admin' && view === 'invites') content = <InvitationCodesView />
+  else if (view === 'queries') content = <AttendanceQueriesView />
   else if (role === 'faculty') content = <FacultyDashboard go={go} />
   else if (role === 'admin') content = <AdminDashboard go={go} />
   else content = <StudentDashboard go={go} />

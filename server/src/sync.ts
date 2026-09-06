@@ -1,9 +1,5 @@
 import type { Request, Response } from 'express';
-import fs from 'node:fs';
-import path from 'node:path';
 import { query } from './db.js';
-
-const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads');
 
 const TABLES_IN_ORDER = [
   'profiles',
@@ -43,4 +39,3 @@ export async function handleSyncToSupabase(_req: Request, res: Response) {
     message: 'MongoDB Atlas is active as the primary cloud database. Local backup exported successfully.',
   });
 }
-

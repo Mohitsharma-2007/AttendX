@@ -1,19 +1,149 @@
 import { useState, useEffect } from 'react';
-import { Server, Database, CloudUpload, Download, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { Server, Database, Download, CheckCircle2, AlertCircle, RefreshCw, ShieldCheck, Mail, Users, Send } from 'lucide-react';
 import { Button } from './ui';
-import { getLocalServerUrl, setLocalServerUrl } from '../lib/supabase';
+import { getLocalServerUrl, setLocalServerUrl } from '../lib/apiClient';
+
+function MassMailPanel() {
+  const [subject, setSubject] = useState('');
+  const [message, setMessage] = useState('');
+  const [role, setRole] = useState('all');
+  const [includeApk, setIncludeApk] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [recipientCount, setRecipientCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem('attendx_auth_token') || '';
+    fetch(`${getLocalServerUrl()}/api/admin/mass-email/recipients?role=${role}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Failed'))))
+      .then((data) => setRecipientCount(data.count))
+      .catch(() => setRecipientCount(null));
+  }, [role]);
+
+  const send = async () => {
+    if (!subject.trim() || !message.trim()) {
+      setResult({ ok: false, text: 'Add a subject and a message before sending.' });
+      return;
+    }
+    setSending(true);
+    setResult(null);
+    try {
+      const token = localStorage.getItem('attendx_auth_token') || '';
+      const res = await fetch(`${getLocalServerUrl()}/api/admin/mass-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          subject: subject.trim(),
+          message: message.trim(),
+          role,
+          includeApkLink: includeApk,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not send the notice');
+      setResult({
+        ok: true,
+        text: `Notice sent to ${data.sent} of ${data.recipients} recipients${data.failed ? ` (${data.failed} failed)` : ''}.`,
+      });
+      setSubject('');
+      setMessage('');
+    } catch (err) {
+      setResult({ ok: false, text: (err as Error).message });
+    }
+    setSending(false);
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <Mail size={20} />
+          <h2>Mass Mail — Notice to Users</h2>
+        </div>
+      </div>
+      <p style={{ color: 'var(--muted)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+        Send an official email notice to every active user. Include the latest
+        Android APK link so everyone can update the app straight from the mail.
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <label className="field-label" style={{ marginBottom: 0, flex: 1, minWidth: '180px' }}>
+            Audience
+            <select className="text-input" value={role} onChange={(e) => setRole(e.target.value)}>
+              <option value="all">Everyone (students + faculty)</option>
+              <option value="student">Students only</option>
+              <option value="faculty">Faculty only</option>
+            </select>
+          </label>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.4rem', paddingBottom: '17px', fontSize: '0.85rem', color: 'var(--muted)' }}>
+            <Users size={16} />
+            <span>{recipientCount === null ? '…' : `${recipientCount} recipient${recipientCount === 1 ? '' : 's'}`}</span>
+          </div>
+        </div>
+        <label className="field-label" style={{ marginBottom: 0 }}>
+          Subject
+          <input
+            className="text-input"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="New app update available — please update AttendX"
+          />
+        </label>
+        <label className="field-label" style={{ marginBottom: 0 }}>
+          Message
+          <textarea
+            className="text-input"
+            style={{ minHeight: '110px', paddingTop: '10px', resize: 'vertical' }}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Dear users, a new version of the AttendX Android app is available. Please update using the button below…"
+          />
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.88rem', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            className="toggle"
+            checked={includeApk}
+            onChange={(e) => setIncludeApk(e.target.checked)}
+          />
+          Attach the latest APK download link to this notice
+        </label>
+        <div>
+          <Button onClick={send} disabled={sending}>
+            <Send size={16} />
+            {sending ? 'Sending…' : 'Send notice to everyone'}
+          </Button>
+        </div>
+      </div>
+      {result && (
+        <div
+          style={{
+            marginTop: '0.9rem',
+            padding: '0.6rem 0.9rem',
+            borderRadius: '6px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            fontSize: '0.88rem',
+            backgroundColor: result.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+            color: result.ok ? '#22c55e' : '#ef4444',
+          }}
+        >
+          {result.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+          {result.text}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export function ServerAndSyncSettings() {
   const [serverUrl, setServerUrlState] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-
-  // Supabase migration state
-  const [supabaseUrl, setSupabaseUrl] = useState('');
-  const [serviceKey, setServiceKey] = useState('');
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<any>(null);
-  const [syncError, setSyncError] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     setServerUrlState(getLocalServerUrl());
@@ -28,7 +158,7 @@ export function ServerAndSyncSettings() {
         const json = await res.json();
         setTestResult({
           ok: true,
-          message: `Connected! Database: ${(json.database || 'active').toUpperCase()} (Server v${json.status})`,
+          message: `Connected! Database: ${(json.database || 'active').toUpperCase()}`,
         });
         setLocalServerUrl(serverUrl);
       } else {
@@ -37,63 +167,47 @@ export function ServerAndSyncSettings() {
     } catch (err) {
       setTestResult({
         ok: false,
-        message: `Connection failed: ${(err as Error).message}. Ensure AttendX local server is running.`,
+        message: `Connection failed: ${(err as Error).message}. Ensure the AttendX server is running.`,
       });
     } finally {
       setTesting(false);
     }
   };
 
-  const handleStartSync = async () => {
-    if (!supabaseUrl || !serviceKey) {
-      setSyncError('Please provide both Supabase URL and Service Role Key');
-      return;
-    }
-    setSyncing(true);
-    setSyncError('');
-    setSyncResult(null);
-
+  const handleExportBackup = async () => {
+    setExporting(true);
     try {
-      const res = await fetch(`${getLocalServerUrl()}/api/sync/to-supabase`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ supabaseUrl, serviceRoleKey: serviceKey }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setSyncError(data.error || 'Migration failed');
-      } else {
-        setSyncResult(data);
-      }
-    } catch (err) {
-      setSyncError((err as Error).message);
+      const res = await fetch(`${getLocalServerUrl()}/api/sync/export-json`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'attendx-backup.json';
+      anchor.click();
+      URL.revokeObjectURL(url);
     } finally {
-      setSyncing(false);
+      setExporting(false);
     }
-  };
-
-  const handleExportBackup = () => {
-    window.open(`${getLocalServerUrl()}/api/sync/export-json`, '_blank');
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1.5rem' }}>
-      {/* Local Server Config */}
+      {/* Server / Database connection */}
       <section className="panel">
         <div className="panel-head">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Server size={20} />
-            <h2>Local Server & Network Access</h2>
+            <h2>Server & Database Connection</h2>
           </div>
         </div>
-        <p style={{ color: 'var(--text-muted, #94a3b8)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-          Connect this web application or mobile device to your laptop's local database server.
-          Works on LAN (Wi-Fi) without cloud dependencies.
+        <p style={{ color: 'var(--muted)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+          Connect this web application or mobile device to the AttendX server.
+          Data is stored in MongoDB Atlas with an embedded fallback for offline use.
         </p>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"
-            className="input"
+            className="text-input"
             value={serverUrl}
             onChange={(e) => setServerUrlState(e.target.value)}
             placeholder="http://localhost:3001 or http://192.168.1.50:3001"
@@ -124,92 +238,39 @@ export function ServerAndSyncSettings() {
         )}
       </section>
 
-      {/* 1-Click Migration to Supabase */}
+      {/* Data & backup */}
       <section className="panel">
         <div className="panel-head">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <CloudUpload size={20} />
-            <h2>1-Click Migration to Supabase</h2>
+            <Database size={20} />
+            <h2>Data & Backup</h2>
           </div>
         </div>
-        <p style={{ color: 'var(--text-muted, #94a3b8)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-          Push all locally collected attendance records, profiles, batches, and photo evidence from this laptop
-          directly into your cloud Supabase database and storage in one linear operation.
+        <p style={{ color: 'var(--muted)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+          Export a full JSON snapshot of the database — profiles, classes, attendance records, and queries.
         </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          <input
-            type="text"
-            className="input"
-            value={supabaseUrl}
-            onChange={(e) => setSupabaseUrl(e.target.value)}
-            placeholder="Target Supabase URL (e.g., https://your-ref.supabase.co)"
-          />
-          <input
-            type="password"
-            className="input"
-            value={serviceKey}
-            onChange={(e) => setServiceKey(e.target.value)}
-            placeholder="Supabase Service Role Key (secret)"
-          />
-          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-            <Button onClick={handleStartSync} disabled={syncing}>
-              <Database size={16} />
-              {syncing ? 'Migrating Data...' : 'Migrate Everything to Supabase'}
-            </Button>
-            <Button variant="secondary" onClick={handleExportBackup}>
-              <Download size={16} />
-              Export Local Backup (JSON)
-            </Button>
+        <Button variant="secondary" onClick={handleExportBackup} disabled={exporting}>
+          <Download size={16} />
+          {exporting ? 'Preparing…' : 'Export Database Backup (JSON)'}
+        </Button>
+      </section>
+
+      {/* Admin mass-mail */}
+      <MassMailPanel />
+
+      {/* Security note */}
+      <section className="panel">
+        <div className="panel-head">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <ShieldCheck size={20} />
+            <h2>Security</h2>
           </div>
         </div>
-
-        {syncError && (
-          <div
-            style={{
-              marginTop: '1rem',
-              padding: '0.75rem',
-              borderRadius: '6px',
-              backgroundColor: 'rgba(239, 68, 68, 0.15)',
-              color: '#ef4444',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-            }}
-          >
-            <AlertCircle size={16} />
-            {syncError}
-          </div>
-        )}
-
-        {syncResult && (
-          <div
-            style={{
-              marginTop: '1rem',
-              padding: '1rem',
-              borderRadius: '6px',
-              backgroundColor: 'rgba(34, 197, 94, 0.12)',
-              border: '1px solid rgba(34, 197, 94, 0.3)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#22c55e', fontWeight: 600 }}>
-              <CheckCircle2 size={18} />
-              {syncResult.message}
-            </div>
-            <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--text-muted, #94a3b8)' }}>
-              Evidence files uploaded: <strong>{syncResult.uploadedEvidenceCount}</strong>
-            </div>
-            <div style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
-              <strong>Table counts:</strong>
-              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
-                {Object.entries(syncResult.recordsMigrated || {}).map(([tbl, cnt]) => (
-                  <span key={tbl} className="status status-present">
-                    {tbl}: {String(cnt)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
+        <p style={{ color: 'var(--muted)', marginBottom: '0', fontSize: '0.9rem' }}>
+          Password resets are verified by one-time codes sent through Gmail SMTP.
+          Faculty accounts are activated with emailed invitation codes. Attendance
+          queries are tracked with unique request numbers and resolved by email.
+        </p>
       </section>
     </div>
   );

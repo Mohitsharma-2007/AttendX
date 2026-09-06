@@ -15,7 +15,12 @@ let sqliteDb: DatabaseSync | null = null;
 let mongoClient: MongoClient | null = null;
 let mongoDb: Db | null = null;
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+// Vercel mounts the deployment bundle read-only. Its writable /tmp directory
+// is suitable for the local SQLite fallback during a serverless invocation.
+// Production data should still use MONGODB_URI or DATABASE_URL for persistence.
+const DATA_DIR = process.env.VERCEL
+  ? path.join('/tmp', 'attendx')
+  : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -94,6 +99,9 @@ async function initMongoIndexes() {
     await mongoDb.collection('enrollments').createIndex({ class_id: 1, student_id: 1 }, { unique: true });
     await mongoDb.collection('batch_members').createIndex({ batch_id: 1, student_id: 1 }, { unique: true });
     await mongoDb.collection('batch_faculty').createIndex({ batch_id: 1, faculty_id: 1 }, { unique: true });
+    await mongoDb.collection('attendance_queries').createIndex({ tracking_id: 1 }, { unique: true });
+    await mongoDb.collection('attendance_queries').createIndex({ student_id: 1, created_at: -1 });
+    await mongoDb.collection('attendance_queries').createIndex({ status: 1, created_at: -1 });
   } catch (e) {
     console.warn('MongoDB index initialization note:', (e as Error).message);
   }
@@ -356,6 +364,9 @@ async function runPostgresSchema() {
       code TEXT UNIQUE NOT NULL,
       department TEXT,
       academic_year TEXT,
+      start_year INTEGER,
+      end_year INTEGER,
+      is_active BOOLEAN NOT NULL DEFAULT true,
       created_by UUID,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -366,11 +377,15 @@ async function runPostgresSchema() {
       code TEXT UNIQUE NOT NULL,
       batch_id UUID REFERENCES batches(id) ON DELETE CASCADE,
       faculty_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+      created_by UUID,
+      department TEXT,
       geofence_lat DOUBLE PRECISION,
       geofence_lng DOUBLE PRECISION,
       geofence_radius_m INTEGER DEFAULT 50,
       is_active BOOLEAN NOT NULL DEFAULT true,
       publication_status TEXT DEFAULT 'published',
+      published_by UUID,
+      published_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -381,6 +396,8 @@ async function runPostgresSchema() {
       start_time TEXT,
       end_time TEXT,
       room TEXT,
+      schedule_type TEXT,
+      session_date DATE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -469,6 +486,7 @@ async function runPostgresSchema() {
       status TEXT NOT NULL DEFAULT 'present',
       rejection_reason TEXT,
       evidence_review_status TEXT DEFAULT 'approved',
+      marked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (session_id, student_id)
     );
@@ -477,8 +495,13 @@ async function runPostgresSchema() {
       id UUID PRIMARY KEY,
       batch_id UUID REFERENCES batches(id) ON DELETE CASCADE,
       token TEXT UNIQUE NOT NULL,
+      token_type TEXT DEFAULT 'batch_join',
+      purpose TEXT,
+      max_uses INTEGER,
+      use_count INTEGER NOT NULL DEFAULT 0,
       is_active BOOLEAN NOT NULL DEFAULT true,
       expires_at TIMESTAMPTZ,
+      created_by UUID,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -516,10 +539,35 @@ async function runPostgresSchema() {
 
     CREATE TABLE IF NOT EXISTS system_settings (
       key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      value TEXT NOT NULL,
+      description TEXT,
+      updated_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS attendance_queries (
+      id UUID PRIMARY KEY,
+      tracking_id TEXT UNIQUE NOT NULL,
+      student_id UUID,
+      student_name TEXT,
+      student_email TEXT,
+      student_identifier TEXT,
+      class_id UUID,
+      class_label TEXT,
+      session_id UUID,
+      type TEXT,
+      message TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      admin_note TEXT,
+      email_sent BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ,
+      resolved_at TIMESTAMPTZ
     );
   `;
   await pgPool.query(ddl);
+  await pgPool.query(
+    "ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS marked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+  );
 }
 
 async function runSqliteSchema() {
@@ -546,6 +594,9 @@ async function runSqliteSchema() {
       code TEXT UNIQUE NOT NULL,
       department TEXT,
       academic_year TEXT,
+      start_year INTEGER,
+      end_year INTEGER,
+      is_active INTEGER NOT NULL DEFAULT 1,
       created_by TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -556,11 +607,15 @@ async function runSqliteSchema() {
       code TEXT UNIQUE NOT NULL,
       batch_id TEXT REFERENCES batches(id) ON DELETE CASCADE,
       faculty_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+      created_by TEXT,
+      department TEXT,
       geofence_lat REAL,
       geofence_lng REAL,
       geofence_radius_m INTEGER DEFAULT 50,
       is_active INTEGER NOT NULL DEFAULT 1,
       publication_status TEXT DEFAULT 'published',
+      published_by TEXT,
+      published_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -571,6 +626,8 @@ async function runSqliteSchema() {
       start_time TEXT,
       end_time TEXT,
       room TEXT,
+      schedule_type TEXT,
+      session_date TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -659,6 +716,7 @@ async function runSqliteSchema() {
       status TEXT NOT NULL DEFAULT 'present',
       rejection_reason TEXT,
       evidence_review_status TEXT DEFAULT 'approved',
+      marked_at TEXT NOT NULL DEFAULT (datetime('now')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE (session_id, student_id)
     );
@@ -667,8 +725,13 @@ async function runSqliteSchema() {
       id TEXT PRIMARY KEY,
       batch_id TEXT REFERENCES batches(id) ON DELETE CASCADE,
       token TEXT UNIQUE NOT NULL,
+      token_type TEXT DEFAULT 'batch_join',
+      purpose TEXT,
+      max_uses INTEGER,
+      use_count INTEGER NOT NULL DEFAULT 0,
       is_active INTEGER NOT NULL DEFAULT 1,
       expires_at TEXT,
+      created_by TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -706,10 +769,67 @@ async function runSqliteSchema() {
 
     CREATE TABLE IF NOT EXISTS system_settings (
       key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      value TEXT NOT NULL,
+      description TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS attendance_queries (
+      id TEXT PRIMARY KEY,
+      tracking_id TEXT UNIQUE NOT NULL,
+      student_id TEXT,
+      student_name TEXT,
+      student_email TEXT,
+      student_identifier TEXT,
+      class_id TEXT,
+      class_label TEXT,
+      session_id TEXT,
+      type TEXT,
+      message TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      admin_note TEXT,
+      email_sent INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT,
+      updated_at TEXT,
+      resolved_at TEXT
     );
   `;
   sqliteDb.exec(ddl);
+
+  // Existing local databases predate marked_at. SQLite cannot add this column
+  // with a non-constant default, so backfill it from the existing timestamp.
+  const columns = sqliteDb.prepare('PRAGMA table_info(attendance_records)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'marked_at')) {
+    sqliteDb.exec('ALTER TABLE attendance_records ADD COLUMN marked_at TEXT');
+    sqliteDb.exec('UPDATE attendance_records SET marked_at = created_at WHERE marked_at IS NULL');
+  }
+
+  // ── Migrations for databases created before these columns existed ──
+  const columnsFor = (table: string): Array<{ name: string }> =>
+    sqliteDb!.prepare('PRAGMA table_info(' + table + ')').all() as Array<{ name: string }>;
+  const addColumn = (table: string, column: string, ddlType: string) => {
+    if (!columnsFor(table).some((c) => c.name === column)) {
+      sqliteDb.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddlType}`);
+    }
+  };
+
+  addColumn('class_schedules', 'schedule_type', 'TEXT');
+  addColumn('class_schedules', 'session_date', 'TEXT');
+  addColumn('qr_tokens', 'use_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('batches', 'start_year', 'INTEGER');
+  addColumn('batches', 'end_year', 'INTEGER');
+  addColumn('batches', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+  addColumn('classes', 'created_by', 'TEXT');
+  addColumn('classes', 'department', 'TEXT');
+  addColumn('classes', 'published_by', 'TEXT');
+  addColumn('classes', 'published_at', 'TEXT');
+  addColumn('join_tokens', 'token_type', "TEXT DEFAULT 'batch_join'");
+  addColumn('join_tokens', 'purpose', 'TEXT');
+  addColumn('join_tokens', 'max_uses', 'INTEGER');
+  addColumn('join_tokens', 'use_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('join_tokens', 'created_by', 'TEXT');
+  addColumn('system_settings', 'description', 'TEXT');
+  addColumn('system_settings', 'updated_at', 'TEXT');
 }
 
 // Simple hash for password
@@ -776,32 +896,42 @@ async function seedDefaults() {
 
     const classId = crypto.randomUUID();
     await execute(
-      `INSERT INTO classes (id, name, code, batch_id, geofence_lat, geofence_lng, geofence_radius_m, is_active, publication_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [classId, 'Advanced Distributed Systems', 'CS401', batchId, 28.6139, 77.2090, 100, 1, 'published']
+      `INSERT INTO classes (id, name, code, batch_id, faculty_id, department, geofence_lat, geofence_lng, geofence_radius_m, is_active, publication_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [classId, 'Advanced Distributed Systems', 'CS401', batchId, faculty.id, 'Computer Science', 28.6139, 77.2090, 100, 1, 'published']
     );
 
     // Link faculty to batch and enroll student
-    const bfId = crypto.randomUUID();
     await execute(
       `INSERT OR IGNORE INTO batch_faculty (id, batch_id, faculty_id) VALUES (?, ?, ?)`,
-      [bfId, batchId, faculty.id]
+      [crypto.randomUUID(), batchId, faculty.id]
     );
-    const bmId = crypto.randomUUID();
     await execute(
       `INSERT OR IGNORE INTO batch_members (id, batch_id, student_id, status) VALUES (?, ?, ?, ?)`,
-      [bmId, batchId, student.id, 'active']
+      [crypto.randomUUID(), batchId, student.id, 'active']
     );
-    const enrollId = crypto.randomUUID();
     await execute(
       `INSERT OR IGNORE INTO enrollments (id, class_id, student_id, status) VALUES (?, ?, ?, ?)`,
-      [enrollId, classId, student.id, 'active']
+      [crypto.randomUUID(), classId, student.id, 'active']
     );
 
-    // Seed default system settings
-    await execute(`INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)`, ['web_attendance_enabled', 'true']);
-    await execute(`INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)`, ['identity_document_required', 'false']);
-
     console.log('✅ Seeded default batch (CS-2026), class (CS401), and linked faculty/student');
+  } else {
+    // Self-repair older seeded databases that are missing the faculty/student
+    // links (the class previously shipped without faculty_id assigned).
+    const batch = batches[0] as any;
+    const linkedClass = await getOne('SELECT id FROM classes WHERE batch_id = ? LIMIT 1', [batch.id]);
+    if (linkedClass) {
+      await execute('UPDATE classes SET faculty_id = ? WHERE id = ? AND faculty_id IS NULL', [faculty.id, linkedClass.id]);
+    }
+    await execute('INSERT OR IGNORE INTO batch_faculty (id, batch_id, faculty_id) VALUES (?, ?, ?)', [crypto.randomUUID(), batch.id, faculty.id]);
+    await execute('INSERT OR IGNORE INTO batch_members (id, batch_id, student_id, status) VALUES (?, ?, ?, ?)', [crypto.randomUUID(), batch.id, student.id, 'active']);
+    if (linkedClass) {
+      await execute('INSERT OR IGNORE INTO enrollments (id, class_id, student_id, status) VALUES (?, ?, ?, ?)', [crypto.randomUUID(), linkedClass.id, student.id, 'active']);
+    }
   }
+
+  // Seed default system settings
+  await execute(`INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)`, ['web_attendance_enabled', 'true']);
+  await execute(`INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)`, ['identity_document_required', 'false']);
 }

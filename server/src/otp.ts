@@ -1,54 +1,93 @@
-import nodemailer from 'nodemailer';
 import crypto from 'node:crypto';
-import { getMongoDb, isMongoActive, execute, getOne } from './db.js';
+import { getMongoDb, isMongoActive, execute, getOne, query } from './db.js';
+import { sendOtpEmail } from './mailer.js';
 
-const SMTP_USER = process.env.SMTP_USER || '';
-const SMTP_PASS = process.env.SMTP_PASS || '';
+type OtpPurpose = 'login' | 'signup' | 'password_reset' | 'general';
 
-// Configure Gmail SMTP transporter
-export const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: SMTP_USER,
-    pass: SMTP_PASS,
-  },
-});
-
-export interface OtpRecord {
+interface OtpRecord {
+  id: string;
   email: string;
   code: string;
-  purpose: 'login' | 'signup' | 'password_reset' | 'general';
-  expiresAt: Date;
-  createdAt: Date;
+  purpose: OtpPurpose;
+  expiresAt: string;
+  createdAt: string;
+  attempts: number;
+  used: boolean;
+}
+
+// ── MongoDB collection for OTPs with TTL cleanup ──────────────────────
+async function ensureOtpCollection() {
+  if (!isMongoActive()) return;
+  const mongo = getMongoDb();
+  if (!mongo) return;
+  try {
+    const col = mongo.collection('otps');
+    const indexes = await col.indexes();
+    if (!indexes.some((i) => i.name === 'expiresAt_ttl')) {
+      await col.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 60, name: 'expiresAt_ttl' });
+    }
+    await col.createIndex({ email: 1, purpose: 1 });
+  } catch (e) {
+    console.warn('[AttendX OTP] Index init note:', (e as Error).message);
+  }
+}
+
+// ── Simple in-memory rate limiting: max 4 requests / 10 min / email ───
+const rateMap = new Map<string, number[]>();
+function isRateLimited(key: string): boolean {
+  const now = Date.now();
+  const hits = (rateMap.get(key) || []).filter((t) => now - t < 10 * 60 * 1000);
+  if (hits.length >= 4) return true;
+  hits.push(now);
+  rateMap.set(key, hits);
+  return false;
 }
 
 /**
- * Generate a 6-digit numeric OTP and send via Gmail SMTP
+ * Generate a 6-digit numeric OTP, persist it (MongoDB first, SQLite fallback)
+ * and deliver it via Gmail SMTP.
  */
 export async function generateAndSendOtp(
   email: string,
-  purpose: 'login' | 'signup' | 'password_reset' | 'general' = 'login'
+  purpose: OtpPurpose = 'login'
 ): Promise<{ success: boolean; message: string }> {
   const targetEmail = email.trim().toLowerCase();
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes valid
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail)) {
+    return { success: false, message: 'A valid email address is required' };
+  }
+  if (isRateLimited(`${targetEmail}:${purpose}`)) {
+    return { success: false, message: 'Too many code requests. Please wait 10 minutes before trying again.' };
+  }
 
-  // 1. Store in MongoDB if active, or local DB fallback
-  const mongo = getMongoDb();
-  if (isMongoActive() && mongo) {
-    await mongo.collection('otps').deleteMany({ email: targetEmail, purpose });
-    await mongo.collection('otps').insertOne({
-      email: targetEmail,
-      code,
-      purpose,
-      expiresAt,
-      createdAt: new Date(),
-    });
+  // Verify the account exists for password resets — never leak validity, but
+  // do not dispatch codes to unknown inboxes either.
+  if (purpose === 'password_reset') {
+    const user = await getOne('SELECT id FROM profiles WHERE lower(email) = ?', [targetEmail]).catch(() => null);
+    if (!user) {
+      return { success: false, message: 'No AttendX account exists for this email address' };
+    }
+  }
+
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+  await ensureOtpCollection();
+
+  if (isMongoActive()) {
+    const mongo = getMongoDb();
+    if (mongo) {
+      await mongo.collection('otps').deleteMany({ email: targetEmail, purpose });
+      await mongo.collection('otps').insertOne({
+        email: targetEmail,
+        code,
+        purpose,
+        expiresAt,
+        createdAt: new Date(),
+        attempts: 0,
+        used: false,
+      });
+    }
   } else {
-    // Local SQLite fallback
     await execute('DELETE FROM password_resets WHERE email = ? AND reason = ?', [targetEmail, `otp_${purpose}`]);
     await execute(
       `INSERT INTO password_resets (id, email, temp_password, reason, status, created_at)
@@ -57,97 +96,72 @@ export async function generateAndSendOtp(
     );
   }
 
-  // 2. Beautiful responsive dark-mode HTML template with AttendX branding
-  const htmlContent = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b1311; color: #f1f5f9; margin: 0; padding: 24px; }
-        .card { max-width: 460px; margin: 0 auto; background: #131d1b; border: 1px solid #223733; border-radius: 14px; padding: 32px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; font-weight: 800; font-size: 20px; color: #10b981; letter-spacing: 0.5px; }
-        .logo span { color: #f1f5f9; }
-        h1 { font-size: 22px; font-weight: 700; margin: 0 0 10px; color: #ffffff; }
-        p { font-size: 14px; color: #94a3b8; line-height: 1.5; margin: 0 0 20px; }
-        .otp-box { background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(59, 130, 246, 0.12)); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; padding: 18px; text-align: center; margin: 24px 0; }
-        .otp-code { font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #34d399; font-family: monospace; }
-        .expiry { font-size: 12px; color: #64748b; margin-top: 6px; }
-        .footer { border-top: 1px solid #1e293b; padding-top: 16px; margin-top: 24px; font-size: 12px; color: #64748b; text-align: center; }
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <div class="logo">
-          <span>Attend</span>X
-        </div>
-        <h1>Verification Code</h1>
-        <p>Use the one-time security code below to complete your authentication for <strong>${targetEmail}</strong>.</p>
-        <div class="otp-box">
-          <div class="otp-code">${code}</div>
-          <div class="expiry">Valid for 5 minutes • Do not share this code</div>
-        </div>
-        <p style="font-size: 13px; color: #64748b;">If you didn't request this verification code, please ignore this email.</p>
-        <div class="footer">
-          AttendX Institutional Attendance & Presence Infrastructure
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-
-  try {
-    await transporter.sendMail({
-      from: `"AttendX Security" <${SMTP_USER}>`,
-      to: targetEmail,
-      subject: `Your AttendX Verification Code: ${code}`,
-      html: htmlContent,
-      text: `Your AttendX verification code is: ${code}. Valid for 5 minutes.`,
-    });
-    console.log(` Email OTP successfully dispatched to ${targetEmail}`);
-    return { success: true, message: 'Verification code sent to your email' };
-  } catch (err) {
-    console.error('❌ Failed to send SMTP email:', err);
-    return {
-      success: false,
-      message: `Failed to dispatch email: ${(err as Error).message}`,
-    };
+  const delivered = await sendOtpEmail(targetEmail, code, purpose);
+  if (!delivered) {
+    return { success: false, message: 'Could not dispatch the verification email. Please try again shortly.' };
   }
+  return { success: true, message: 'Verification code sent to your email' };
 }
 
 /**
- * Verify an OTP entered by the user
+ * Verify an OTP entered by the user. The code is consumed on success and
+ * failed attempts are tracked (max 5) to prevent brute forcing.
  */
 export async function verifyOtpCode(
   email: string,
   code: string,
-  purpose: 'login' | 'signup' | 'password_reset' | 'general' = 'login'
+  purpose: OtpPurpose = 'login'
 ): Promise<boolean> {
   const targetEmail = email.trim().toLowerCase();
-  const targetCode = code.trim();
+  const targetCode = String(code).trim();
 
-  const mongo = getMongoDb();
-  if (isMongoActive() && mongo) {
+  if (isMongoActive()) {
+    const mongo = getMongoDb();
+    if (!mongo) return false;
     const record = await mongo.collection('otps').findOne({
       email: targetEmail,
-      code: targetCode,
       purpose,
+      used: { $ne: true },
       expiresAt: { $gt: new Date() },
     });
-    if (record) {
-      await mongo.collection('otps').deleteOne({ _id: record._id });
-      return true;
+    if (!record) return false;
+    if (record.code !== targetCode) {
+      const attempts = Number(record.attempts || 0) + 1;
+      if (attempts >= 5) {
+        await mongo.collection('otps').deleteOne({ _id: record._id });
+      } else {
+        await mongo.collection('otps').updateOne({ _id: record._id }, { $set: { attempts } });
+      }
+      return false;
     }
-  } else {
-    const row = await getOne(
-      `SELECT * FROM password_resets WHERE email = ? AND temp_password = ? AND reason = ? AND status = 'active'`,
-      [targetEmail, targetCode, `otp_${purpose}`]
-    );
-    if (row) {
-      await execute(`UPDATE password_resets SET status = 'used' WHERE id = ?`, [row.id]);
-      return true;
-    }
+    await mongo.collection('otps').updateOne({ _id: record._id }, { $set: { used: true } });
+    return true;
   }
 
-  return false;
+  // SQLite fallback (values live in password_resets.temp_password)
+  const row = await getOne(
+    `SELECT id, temp_password AS code FROM password_resets
+     WHERE email = ? AND reason = ? AND status = 'active' AND created_at >= ?`,
+    [targetEmail, `otp_${purpose}`, new Date(Date.now() - 5 * 60 * 1000).toISOString()]
+  );
+  if (!row) return false;
+  if (row.code !== targetCode) return false;
+  await execute(`UPDATE password_resets SET status = 'used' WHERE id = ?`, [row.id]);
+  return true;
+}
+
+/** List active OTP purposes for an email (used by diagnostics/tests). */
+export async function listActiveOtps(email: string): Promise<OtpRecord[]> {
+  const targetEmail = email.trim().toLowerCase();
+  if (isMongoActive()) {
+    const mongo = getMongoDb();
+    if (!mongo) return [];
+    const docs = await mongo.collection('otps').find({ email: targetEmail, used: { $ne: true } }).toArray();
+    return docs.map((doc: any) => ({ ...doc, id: String(doc._id) })) as OtpRecord[];
+  }
+  return query<OtpRecord>(
+    `SELECT id, email, reason AS purpose, created_at AS createdAt FROM password_resets
+     WHERE email = ? AND status = 'active'`,
+    [targetEmail]
+  );
 }

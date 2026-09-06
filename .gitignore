@@ -28,8 +28,13 @@ uploads/
 *.sqlite
 *.sqlite3
 *.db
+data/
 server/uploads/
 server/data/
+
+# Signing keys — never commit
+*.keystore
+*.jks
 
 # Python and AI models
 __pycache__/
@@ -42,6 +47,9 @@ ENV/
 *.onnx
 models/
 insightface_models/
+
+# Built release artifacts (published via GitHub Releases instead)
+releases/*.apk
 
 # Capacitor and IDE
 .vscode/

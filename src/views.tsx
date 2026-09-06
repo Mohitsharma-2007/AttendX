@@ -38,12 +38,14 @@ import {
   Share2,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import { MailQuestion, ShieldCheck as ShieldCheckIcon } from "lucide-react";
 import { Geolocation } from "@capacitor/geolocation";
 import { Capacitor } from "@capacitor/core";
 import { BarcodeScanner } from "@capacitor-mlkit/barcode-scanning";
 import type { Role } from "./types";
 import { useAppStore } from "./store";
-import { supabase } from "./lib/supabase";
+import { supabase } from "./lib/apiClient";
+import { getLocalServerUrl } from "./lib/apiClient";
 import { checkDeviceIntegrity } from "./lib/deviceIntegrity";
 import { Button, Initials, StatusPill } from "./components/ui";
 import {
@@ -125,10 +127,9 @@ function useLoad<T>(
 async function rows<T>(
   query: PromiseLike<{ data: T[] | null; error: any }>,
 ): Promise<T[]> {
-  if (!supabase) throw new Error("Supabase is not configured");
   const { data, error } = await query;
   if (error) throw error;
-  return data ?? [];
+  return (data as T[]) ?? [];
 }
 
 function PageHeader({
@@ -231,16 +232,14 @@ function percent(present: number, total: number) {
 }
 
 async function loadClasses(role: Role, userId: string): Promise<DbClass[]> {
-  if (!supabase) throw new Error("Supabase is not configured");
   if (role === "admin")
-    return rows<DbClass>(supabase.from("classes").select("*, class_schedules(*)").order("name"));
+    return rows<DbClass>(supabase.from("classes").select("*").order("name"));
   if (role === "faculty")
     return rows<DbClass>(
       supabase
         .from("classes")
-        .select("*, class_schedules(*)")
+        .select("*")
         .eq("faculty_id", userId)
-        .eq("is_active", true)
         .order("name"),
     );
   const enrollments = await rows<any>(
@@ -255,31 +254,26 @@ async function loadClasses(role: Role, userId: string): Promise<DbClass[]> {
     ? rows<DbClass>(
         supabase
           .from("classes")
-          .select("*, class_schedules(*)")
+          .select("*")
           .in("id", ids)
-          .eq("is_active", true)
-          .eq("publication_status", "published")
           .order("name"),
       )
     : [];
 }
 
 async function loadFacultyBatches(userId: string): Promise<any[]> {
-  if (!supabase) throw new Error("Supabase is not configured");
   const [assigned, owned] = await Promise.all([
     rows<any>(
       supabase
         .from("faculty_assignments")
-        .select("batch_id,batches(*)")
-        .eq("faculty_id", userId)
-        .eq("is_active", true),
+        .select("*")
+        .eq("faculty_id", userId),
     ),
     rows<any>(
       supabase
         .from("batches")
         .select("*")
-        .eq("created_by", userId)
-        .eq("is_active", true),
+        .eq("created_by", userId),
     ),
   ]);
   const combined = [
@@ -289,44 +283,55 @@ async function loadFacultyBatches(userId: string): Promise<any[]> {
   return Array.from(new Map(combined.map((item) => [item.id, item])).values());
 }
 
+/**
+ * Load attendance records. The AttendX API enriches every record with its
+ * session and class information, so filters that used embedded-resource
+ * syntax are applied client-side here.
+ */
 async function loadAttendance(
   role: Role,
   userId: string,
   limit = 50,
-  filters?: { date?: string; month?: string; classId?: string }
+  filters?: { date?: string; month?: string; classId?: string },
 ): Promise<DbRecord[]> {
-  if (!supabase) throw new Error("Supabase is not configured");
-  let query = supabase
-    .from("attendance_records")
-    .select(
-      "*,attendance_sessions!inner(id,class_id,started_at,center_lat,center_lng,geofence_radius_m,classes!inner(name,code,faculty_id)),profiles!attendance_records_student_id_fkey(full_name,identifier)",
-    )
-    .order("marked_at", { ascending: false })
-    .limit(limit);
-    
-  if (role === "student") {
-    query = query.eq("student_id", userId);
-  } else if (role === "faculty") {
-    query = query.eq("attendance_sessions.classes.faculty_id", userId);
-  }
+  let records = await rows<DbRecord>(
+    supabase
+      .from("attendance_records")
+      .select("*")
+      .order("marked_at", { ascending: false })
+      .limit(300),
+  );
 
-  if (filters?.classId) {
-    query = query.eq("attendance_sessions.class_id", filters.classId);
+  if (role === "student") {
+    records = records.filter((r) => r.student_id === userId);
+  } else if (role === "faculty") {
+    records = records.filter(
+      (r) => r.attendance_sessions?.classes?.faculty_id === userId,
+    );
   }
-  
+  if (filters?.classId) {
+    records = records.filter(
+      (r) => r.attendance_sessions?.class_id === filters.classId,
+    );
+  }
   if (filters?.date) {
     const start = new Date(filters.date);
     const end = new Date(filters.date);
     end.setDate(end.getDate() + 1);
-    query = query.gte("marked_at", start.toISOString()).lt("marked_at", end.toISOString());
+    records = records.filter((r) => {
+      const t = new Date(r.marked_at).getTime();
+      return t >= start.getTime() && t < end.getTime();
+    });
   } else if (filters?.month) {
     const start = new Date(filters.month + "-01");
     const end = new Date(start);
     end.setMonth(end.getMonth() + 1);
-    query = query.gte("marked_at", start.toISOString()).lt("marked_at", end.toISOString());
+    records = records.filter((r) => {
+      const t = new Date(r.marked_at).getTime();
+      return t >= start.getTime() && t < end.getTime();
+    });
   }
-
-  return rows<DbRecord>(query);
+  return records.slice(0, limit);
 }
 
 export function StudentDashboard({ go }: { go: (key: any) => void }) {
@@ -339,15 +344,13 @@ export function StudentDashboard({ go }: { go: (key: any) => void }) {
       sessions: [] as any[],
     },
     async () => {
-      if (!supabase) throw new Error("Supabase is not configured");
       const [classes, records, summaries] = await Promise.all([
         loadClasses("student", profile.id),
         loadAttendance("student", profile.id, 8),
         rows<any>(
           supabase
             .from("student_attendance_summary")
-            .select("*")
-            .eq("student_id", profile.id),
+            .select("*"),
         ),
       ]);
       const classIds = classes.map((item) => item.id);
@@ -355,7 +358,7 @@ export function StudentDashboard({ go }: { go: (key: any) => void }) {
         ? await rows<any>(
             supabase
               .from("attendance_sessions")
-              .select("*,classes(name,code)")
+              .select("*")
               .in("class_id", classIds)
               .eq("status", "active")
               .order("started_at", { ascending: false }),
@@ -549,13 +552,12 @@ export function StudentClasses({ go }: { go: (key: any) => void }) {
   const batches = useLoad(
     [] as any[],
     async () => {
-      if (!supabase) throw new Error("Supabase is not configured");
       if (role === "faculty") return loadFacultyBatches(profile.id);
       if (role === "student")
         return rows<any>(
           supabase
             .from("batch_members")
-            .select("id,status,batches(*)")
+            .select("*")
             .eq("student_id", profile.id)
             .eq("status", "active"),
         );
@@ -581,19 +583,14 @@ export function StudentClasses({ go }: { go: (key: any) => void }) {
     `${item.name} ${item.code}`.toLowerCase().includes(query.toLowerCase()),
   );
   const join = async (value = joinToken) => {
-    if (!supabase || !value) return;
+    if (!value) return;
     setBusy(true);
     setMessage("");
     const { error } = await supabase.functions.invoke("join-batch", {
       body: { token: extractJoinToken(value) },
     });
     if (error) {
-      let msg = error.message;
-      if (error.context instanceof Response) {
-        const body = await error.context.clone().json().catch(() => null);
-        if (body && body.error) msg = body.error;
-      }
-      setMessage(msg);
+      setMessage(error.message);
     } else {
       setMessage("Batch joined. Published classes are now available.");
       setJoinToken("");
@@ -604,7 +601,6 @@ export function StudentClasses({ go }: { go: (key: any) => void }) {
   };
   const createClass = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!supabase) return;
     setBusy(true);
     setMessage("");
     const { data: newClass, error } = await supabase
@@ -629,7 +625,7 @@ export function StudentClasses({ go }: { go: (key: any) => void }) {
           session_date: classForm.sessionDate,
           start_time: classForm.startTime,
           end_time: classForm.endTime,
-          room: "TBA"
+          room: "TBA",
         });
       }
       setMessage("Draft class & schedule created. Publish it when ready.");
@@ -647,7 +643,6 @@ export function StudentClasses({ go }: { go: (key: any) => void }) {
     setBusy(false);
   };
   const publish = async (item: DbClass) => {
-    if (!supabase) return;
     setBusy(true);
     const { error } = await supabase
       .from("classes")
@@ -663,7 +658,7 @@ export function StudentClasses({ go }: { go: (key: any) => void }) {
     setBusy(false);
     result.reload();
   };
-  const facultyBatches = batches.data.map((item) => item.batches || item);
+  const facultyBatches = batches.data.map((item) => item.batches || item).filter(Boolean);
   return (
     <>
       <PageHeader
@@ -953,7 +948,7 @@ function BatchQrPanel({
     if (!batchId && batches[0]) setBatchId(batches[0].id);
   }, [batches, batchId]);
   const generate = async () => {
-    if (!supabase || !batchId) return;
+    if (!batchId) return;
     setLoading(true);
     setError("");
     const { data, error } = await supabase.functions.invoke(
@@ -973,7 +968,6 @@ function BatchQrPanel({
   };
   const createBatch = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!supabase) return;
     setLoading(true);
     setError("");
     const { data, error } = await supabase
@@ -1204,7 +1198,7 @@ export function HistoryView({ role }: { role: Role }) {
       <PageHeader
         eyebrow="Verified records"
         title="Attendance records"
-        description="Every row is read from Supabase and retains its evidence and review status."
+        description="Every row is read from the AttendX database and retains its evidence and review status."
         action={
           <Button
             variant="secondary"
@@ -1491,7 +1485,7 @@ export function MarkAttendance({ go }: { go: (key: any) => void }) {
     }
   };
   const submit = async () => {
-    if (!supabase || !location || !selfie || !classroom) return;
+    if (!location || !selfie || !classroom) return;
     setSubmitting(true);
     setError("");
     let deviceId = localStorage.getItem("attendx-device-id");
@@ -1729,14 +1723,13 @@ export function FacultyDashboard({ go }: { go: (key: any) => void }) {
       batches: [] as any[],
     },
     async () => {
-      if (!supabase) throw new Error("Supabase is not configured");
       const classes = await loadClasses("faculty", profile.id),
         ids = classes.map((item) => item.id);
       const sessions = ids.length
         ? await rows<any>(
             supabase
               .from("attendance_sessions")
-              .select("*,classes(name,code)")
+              .select("*")
               .in("class_id", ids)
               .order("started_at", { ascending: false })
               .limit(10),
@@ -1911,13 +1904,6 @@ export function FacultySession() {
       body: { sessionId },
     });
     if (error) {
-      if (error.context instanceof Response) {
-        const body = await error.context.clone().json().catch(() => null);
-        if (body && body.error) {
-          setError(body.error);
-          return;
-        }
-      }
       setError(error.message);
     } else {
       setToken(data.token);
@@ -1929,44 +1915,33 @@ export function FacultySession() {
     void issueQr(session.id);
     const id = window.setInterval(
       () => void issueQr(session.id),
-      Math.max(5, session.qr_refresh_interval_s) * 1000,
+      Math.max(5, session.qr_refresh_interval_s || session.refresh_interval_s || 15) * 1000,
     );
-    const channel = supabase
-      ?.channel(`session-${session.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "attendance_records",
-          filter: `session_id=eq.${session.id}`,
-        },
-        () => void refreshRoster(session.id),
-      )
-      .subscribe();
+    // Local API has no realtime channels — poll the roster instead.
+    const rosterId = window.setInterval(
+      () => void refreshRoster(session.id),
+      5000,
+    );
+    void refreshRoster(session.id);
     return () => {
       clearInterval(id);
-      if (channel) void supabase?.removeChannel(channel);
+      clearInterval(rosterId);
     };
   }, [session?.id]);
   const refreshRoster = async (sessionId: string) => {
-    if (!supabase) return;
     try {
-      setRecords(
-        await rows<DbRecord>(
-          supabase
-            .from("attendance_records")
-            .select(
-              "*,profiles!attendance_records_student_id_fkey(full_name,identifier)",
-            )
-            .eq("session_id", sessionId)
-            .order("marked_at"),
-        ),
+      const all = await rows<DbRecord>(
+        supabase
+          .from("attendance_records")
+          .select("*")
+          .eq("session_id", sessionId)
+          .order("marked_at"),
       );
+      setRecords(all.filter((r) => r.session_id === sessionId));
     } catch {}
   };
   const start = async () => {
-    if (!supabase || !classId) return;
+    if (!classId) return;
     setLoading(true);
     setError("");
     try {
@@ -2011,19 +1986,13 @@ export function FacultySession() {
           classId,
           scheduleId,
           scheduledEndAt,
-          qrRefreshIntervalS: Number(qrRefreshIntervalS),
+          refreshIntervalSeconds: Number(qrRefreshIntervalS),
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
           accuracy: position.coords.accuracy,
         },
       });
-      if (error) {
-        if (error.context instanceof Response) {
-          const body = await error.context.clone().json().catch(() => null);
-          if (body && body.error) throw new Error(body.error);
-        }
-        throw error;
-      }
+      if (error) throw error;
       setSession(data.session);
       await refreshRoster(data.session.id);
     } catch (error) {
@@ -2034,7 +2003,7 @@ export function FacultySession() {
     setLoading(false);
   };
   const end = async () => {
-    if (!supabase || !session) return;
+    if (!session) return;
     const { error } = await supabase
       .from("attendance_sessions")
       .update({ status: "closed", ended_at: new Date().toISOString() })
@@ -2052,7 +2021,7 @@ export function FacultySession() {
       <PageHeader
         eyebrow="Faculty session"
         title={session ? selected?.name || "Live session" : "Start attendance"}
-        description="QR tokens are generated and signed by the Supabase Edge Function."
+        description="QR tokens are generated and signed by the AttendX server."
         action={
           session ? (
             <Button variant="danger" onClick={end}>
@@ -2220,29 +2189,40 @@ export function FacultySession() {
 }
 
 function AdminFacultyApprovals() {
-  const result = useLoad([] as any[], () => rows<any>(
-    supabase!.from('profiles').select('*').eq('role', 'faculty').eq('approval_status', 'pending')
-  ), [])
+  const result = useLoad([] as any[], () =>
+    fetch(`${getLocalServerUrl()}/api/faculty/pending`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('attendx_auth_token') || ''}` },
+    }).then(async (res) => {
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to load pending faculty');
+      return res.json() as Promise<any[]>;
+    }),
+  []);
   const [selected, setSelected] = useState<any>(null)
   const [loading, setLoading] = useState(false)
-  const [qr, setQr] = useState<any>(null)
+  const [code, setCode] = useState<any>(null)
+  const [emailSent, setEmailSent] = useState(false)
   const [error, setError] = useState("")
 
   const approve = async () => {
-    if (!supabase || !selected) return
+    if (!selected) return
     setLoading(true)
     setError("")
-    const { data: qrData, error: qrErr } = await supabase.functions.invoke("generate-join-qr", {
-      body: { purpose: "faculty_signup", maxUses: 1, expiresInMinutes: 43200 }
-    })
-    if (qrErr) { setError(qrErr.message); setLoading(false); return }
-    
-    const { error: dbErr } = await supabase.from('profiles').update({ approval_status: 'approved_waiting_code' }).eq('id', selected.id)
-    if (dbErr) { setError(dbErr.message); setLoading(false); return }
-
-    setQr(qrData)
+    try {
+      const res = await fetch(`${getLocalServerUrl()}/api/faculty/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('attendx_auth_token') || ''}` },
+        body: JSON.stringify({ facultyId: selected.id }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) throw new Error(data.error || 'Approval failed')
+      setCode(data.code)
+      setEmailSent(Boolean(data.emailSent))
+      setSelected(null)
+      result.reload()
+    } catch (err) {
+      setError((err as Error).message)
+    }
     setLoading(false)
-    result.reload()
   }
 
   return (
@@ -2255,10 +2235,22 @@ function AdminFacultyApprovals() {
       </div>
       <div className="form-body">
         {result.loading ? <LoaderCircle className="spin" size={17} /> : null}
-        {result.data.length === 0 && !selected && !qr && !result.loading && <SmallEmpty label="No pending faculty applications" />}
-        
-        {!selected && !qr && result.data.map(person => (
-          <div className="review-row" key={person.id} style={{ cursor: 'pointer', padding: '1rem', border: '1px solid var(--border)', borderRadius: '8px', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }} onClick={() => setSelected(person)}>
+        {result.error && <div className="inline-error"><AlertTriangle size={16} />{result.error}</div>}
+        {code && (
+          <div className="active-qr" style={{ textAlign: 'center', padding: '2rem 1rem' }}>
+            <CheckCircle2 size={32} style={{ color: 'var(--green)', margin: '0 auto 1rem' }} />
+            <h3>Application Approved</h3>
+            <p style={{ color: 'var(--muted)' }}>
+              {emailSent ? 'The invitation code was emailed to the faculty member:' : 'Email delivery failed — share this code manually:'}
+            </p>
+            <div className="qr-value" style={{ fontSize: '1.5rem', margin: '1rem 0', userSelect: 'all', padding: '1rem', background: 'var(--green-pale)', borderRadius: '8px', border: '1px solid var(--line)' }}>{code}</div>
+            <Button onClick={() => { setCode(null) }}>Done</Button>
+          </div>
+        )}
+        {!code && result.data.length === 0 && !result.loading && <SmallEmpty label="No pending faculty applications" />}
+
+        {!code && result.data.map(person => (
+          <div className="review-row" key={person.id} style={{ cursor: 'pointer', padding: '1rem', border: '1px solid var(--line)', borderRadius: '8px', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }} onClick={() => setSelected(person)}>
              <span className="review-icon review-amber"><Users size={17} /></span>
              <span style={{ flex: 1 }}>
                <strong>{person.full_name}</strong>
@@ -2268,26 +2260,15 @@ function AdminFacultyApprovals() {
           </div>
         ))}
 
-        {selected && !qr && (
-          <div className="review-detail" style={{ padding: '1rem', background: 'var(--panel-bg)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+        {selected && !code && (
+          <div className="review-detail" style={{ padding: '1rem', background: 'var(--surface)', borderRadius: '8px', border: '1px solid var(--line)' }}>
             <h3 style={{ marginBottom: '0.5rem' }}>Review: {selected.full_name}</h3>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>ID: {selected.identifier} | Email: {selected.email} | Dept: {selected.department}</p>
+            <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>ID: {selected.identifier} | Email: {selected.email} | Dept: {selected.department}</p>
             {error && <div className="login-error"><AlertTriangle size={16}/>{error}</div>}
             <div className="qr-actions" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-              <Button onClick={approve} disabled={loading}>{loading ? <LoaderCircle className="spin" size={17}/> : 'Approve & Generate Code'}</Button>
+              <Button onClick={approve} disabled={loading}>{loading ? <LoaderCircle className="spin" size={17}/> : 'Approve & Email Code'}</Button>
               <Button variant="secondary" onClick={() => setSelected(null)} disabled={loading}>Cancel</Button>
             </div>
-          </div>
-        )}
-
-        {qr && (
-          <div className="active-qr" style={{ textAlign: 'center', padding: '2rem 1rem' }}>
-            <CheckCircle2 size={32} style={{ color: 'var(--brand-main)', margin: '0 auto 1rem' }} />
-            <h3>Application Approved</h3>
-            <p style={{ color: 'var(--text-secondary)' }}>Share this code with {selected?.full_name}:</p>
-            <div className="qr-value" style={{ fontSize: '1.5rem', margin: '1rem 0', userSelect: 'all', padding: '1rem', background: 'var(--bg)', borderRadius: '8px', border: '1px solid var(--border)' }}>{qr.token}</div>
-            <p className="eyebrow" style={{ marginBottom: '1rem' }}>Ensure you email this code to {selected?.email}</p>
-            <Button onClick={() => { setQr(null); setSelected(null) }}>Done</Button>
           </div>
         )}
       </div>
@@ -2306,42 +2287,26 @@ export function AdminDashboard({ go }: { go: (key: any) => void }) {
       resets: [] as any[],
     },
     async () => {
-      if (!supabase) throw new Error("Supabase is not configured");
       const [people, active, sessions, review, recent, resets] =
         await Promise.all([
-          supabase.from("profiles").select("*", { count: "exact", head: true }),
-          supabase
-            .from("profiles")
-            .select("*", { count: "exact", head: true })
-            .eq("is_active", true),
-          supabase
-            .from("attendance_sessions")
-            .select("*", { count: "exact", head: true })
-            .eq("status", "active"),
+          rows<any>(supabase.from("profiles").select("*")),
+          rows<any>(supabase.from("profiles").select("*").eq("is_active", true)),
+          rows<any>(supabase.from("attendance_sessions").select("*").eq("status", "active")),
           rows<DbRecord>(
             supabase
               .from("attendance_records")
-              .select(
-                "*,profiles!attendance_records_student_id_fkey(full_name,identifier),attendance_sessions!inner(classes(name,code))",
-              )
+              .select("*")
               .in("status", ["flagged", "pending_review"])
               .order("marked_at")
               .limit(5),
           ),
           loadAttendance("admin", "", 6),
-          rows<any>(
-            supabase
-              .from("admin_password_reset_queue")
-              .select("*")
-              .order("requested_at"),
-          ),
+          rows<any>(supabase.from("admin_password_reset_queue").select("*")),
         ]);
-      if (people.error || active.error || sessions.error)
-        throw people.error || active.error || sessions.error;
       return {
-        people: people.count || 0,
-        active: active.count || 0,
-        sessions: sessions.count || 0,
+        people: people.length,
+        active: active.length,
+        sessions: sessions.length,
         review,
         recent,
         resets,
@@ -2350,24 +2315,15 @@ export function AdminDashboard({ go }: { go: (key: any) => void }) {
     [],
   );
   useEffect(() => {
-    const channel = supabase
-      ?.channel("admin-password-reset-queue")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "password_reset_requests" },
-        result.reload,
-      )
-      .subscribe();
-    return () => {
-      if (channel) void supabase?.removeChannel(channel);
-    };
-  }, []);
+    const poll = window.setInterval(result.reload, 15000);
+    return () => window.clearInterval(poll);
+  }, [result.reload]);
   return (
     <>
       <PageHeader
         eyebrow="Administration"
         title="Control center"
-        description="All counts and queues are live from Supabase."
+        description="All counts and queues are live from the AttendX database."
         action={
           <div className="page-actions">
             <Button onClick={() => go("people")}>
@@ -2482,28 +2438,13 @@ export function AdminDashboard({ go }: { go: (key: any) => void }) {
 export function PasswordRequestsView() {
   const result = useLoad(
     [] as any[],
-    () =>
-      rows<any>(
-        supabase!
-          .from("admin_password_reset_queue")
-          .select("*")
-          .order("requested_at"),
-      ),
+    () => rows<any>(supabase.from("admin_password_reset_queue").select("*")),
     [],
   );
   useEffect(() => {
-    const channel = supabase
-      ?.channel("password-requests-page")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "password_reset_requests" },
-        result.reload,
-      )
-      .subscribe();
-    return () => {
-      if (channel) void supabase?.removeChannel(channel);
-    };
-  }, []);
+    const poll = window.setInterval(result.reload, 15000);
+    return () => window.clearInterval(poll);
+  }, [result.reload]);
   return (
     <>
       <PageHeader
@@ -2548,7 +2489,6 @@ function PasswordResetManager({
       setError("Temporary passwords require at least 12 characters.");
       return;
     }
-    if (!supabase) return;
     setBusy(item.id);
     setError("");
     const { error } = await supabase.functions.invoke("admin-reset-password", {
@@ -2622,7 +2562,7 @@ function PasswordResetManager({
 export function PeopleView() {
   const result = useLoad(
     [] as any[],
-    () => rows<any>(supabase!.from("profiles").select("*").order("full_name")),
+    () => rows<any>(supabase.from("profiles").select("*").order("full_name")),
     [],
   );
   const [query, setQuery] = useState(""),
@@ -2633,7 +2573,6 @@ export function PeopleView() {
       .includes(query.toLowerCase()),
   );
   const toggle = async (person: any) => {
-    if (!supabase) return;
     setBusy(person.id);
     await supabase
       .from("profiles")
@@ -2647,7 +2586,7 @@ export function PeopleView() {
       <PageHeader
         eyebrow="Directory"
         title="People"
-        description="Accounts and profile details stored in Supabase."
+        description="Accounts and profile details stored in the AttendX database."
       />
       <div className="filter-row">
         <div className="search-input search-wide">
@@ -2729,11 +2668,9 @@ export function ReviewQueue() {
     [] as DbRecord[],
     () =>
       rows<DbRecord>(
-        supabase!
+        supabase
           .from("attendance_records")
-          .select(
-            "*,profiles!attendance_records_student_id_fkey(full_name,identifier),attendance_sessions!inner(center_lat,center_lng,geofence_radius_m,classes(name,code))",
-          )
+          .select("*")
           .in("status", ["flagged", "pending_review"])
           .order("marked_at"),
       ),
@@ -2748,7 +2685,7 @@ export function ReviewQueue() {
   }, [result.data, selectedId]);
   const selected = result.data.find((item) => item.id === selectedId);
   const decide = async (status: "present" | "rejected") => {
-    if (!supabase || !selected) return;
+    if (!selected) return;
     if (note.trim().length < 3) {
       setMessage("Enter a review note first.");
       return;
@@ -2772,7 +2709,7 @@ export function ReviewQueue() {
       <PageHeader
         eyebrow="Integrity center"
         title="Review queue"
-        description="Only unresolved Supabase records appear here."
+        description="Only unresolved attendance records appear here."
       />
       <DataState
         loading={result.loading}
@@ -2885,7 +2822,7 @@ export function ReviewQueue() {
 export function SettingsView() {
   const result = useLoad(
     [] as any[],
-    () => rows<any>(supabase!.from("system_settings").select("*").order("key")),
+    () => rows<any>(supabase.from("system_settings").select("*").order("key")),
     [],
   );
   const [values, setValues] = useState<Record<string, string>>({}),
@@ -2901,28 +2838,29 @@ export function SettingsView() {
     [result.data],
   );
   const save = async () => {
-    if (!supabase) return;
     setSaving(true);
     setMessage("");
-    for (const item of result.data) {
-      const raw = values[item.key];
-      let value: any = raw;
-      try {
-        value = JSON.parse(raw);
-      } catch {}
-      const { error } = await supabase
-        .from("system_settings")
-        .update({ value, updated_at: new Date().toISOString() })
-        .eq("key", item.key);
-      if (error) {
-        setMessage(error.message);
-        setSaving(false);
-        return;
-      }
+    try {
+      const token = localStorage.getItem('attendx_auth_token') || '';
+      const res = await fetch(`${getLocalServerUrl()}/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          settings: result.data.map((item: any) => ({
+            key: item.key,
+            value: values[item.key] ?? item.value,
+            description: item.description,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not save settings');
+      setMessage('Settings saved.');
+      result.reload();
+    } catch (err) {
+      setMessage((err as Error).message);
     }
-    setMessage("Settings saved.");
     setSaving(false);
-    result.reload();
   };
   return (
     <>
@@ -2949,24 +2887,41 @@ export function SettingsView() {
         empty={!result.data.length}
       >
         <div className="settings-grid">
-          {result.data.map((item) => (
-            <label className="panel setting-row" key={item.key}>
-              <span>
-                <strong>{item.key.replaceAll("_", " ")}</strong>
-                <small>{item.description}</small>
-              </span>
-              <input
-                className="text-input settings-input"
-                value={values[item.key] ?? ""}
-                onChange={(event) =>
-                  setValues((current) => ({
-                    ...current,
-                    [item.key]: event.target.value,
-                  }))
-                }
-              />
-            </label>
-          ))}
+          {result.data.map((item) => {
+            const isBoolean = /^(true|false)$/i.test(String(values[item.key] ?? item.value));
+            return (
+              <label className="panel setting-row" key={item.key}>
+                <span>
+                  <strong>{item.key.replaceAll("_", " ")}</strong>
+                  <small>{item.description}</small>
+                </span>
+                {isBoolean ? (
+                  <input
+                    type="checkbox"
+                    className="toggle"
+                    checked={String(values[item.key] ?? item.value).toLowerCase() === 'true'}
+                    onChange={(event) =>
+                      setValues((current) => ({
+                        ...current,
+                        [item.key]: event.target.checked ? 'true' : 'false',
+                      }))
+                    }
+                  />
+                ) : (
+                  <input
+                    className="text-input settings-input"
+                    value={values[item.key] ?? ""}
+                    onChange={(event) =>
+                      setValues((current) => ({
+                        ...current,
+                        [item.key]: event.target.value,
+                      }))
+                    }
+                  />
+                )}
+              </label>
+            );
+          })}
         </div>
       </DataState>
       <ServerAndSyncSettings />
@@ -2996,7 +2951,7 @@ export function ProfileView() {
       return;
     }
     setChanging(true);
-    const { error: functionError } = await supabase!.functions.invoke(
+    const { error: functionError } = await supabase.functions.invoke(
       "change-own-password",
       { body: { password } }
     );
@@ -3012,7 +2967,7 @@ export function ProfileView() {
     [] as any[],
     () =>
       rows<any>(
-        supabase!
+        supabase
           .from("devices")
           .select("*")
           .eq("user_id", profile.id)
@@ -3026,40 +2981,28 @@ export function ProfileView() {
       setChanging(true);
       setPassError("");
       setPassMessage("Uploading verified face image...");
-      
-      // Convert base64 back to a Blob for uploading
-      const res = await fetch(photo.dataUrl);
-      const blob = await res.blob();
-      const path = `${profile.id}/${Date.now()}.jpg`;
-      
-      const { error: uploadError } = await supabase!.storage
-        .from('profile-images')
-        .upload(path, blob, { upsert: true });
-        
-      if (uploadError) {
-        setPassError(uploadError.message);
+
+      // Upload via the AttendX server (replaces Supabase storage)
+      const res = await fetch(`${getLocalServerUrl()}/api/profile/photo`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('attendx_auth_token') || ''}`,
+        },
+        body: JSON.stringify({ dataUrl: photo.dataUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setPassError(data.error || 'Could not save the face image');
         setPassMessage("");
         setChanging(false);
         return;
       }
-      
-      const { data: publicUrlData } = supabase!.storage.from('profile-images').getPublicUrl(path);
-      
-      const { error: dbError } = await supabase!.from('profiles').update({
-        enrollment_photo_path: publicUrlData.publicUrl
-      }).eq('id', profile.id);
-      
-      if (dbError) {
-        setPassError(dbError.message);
-        setPassMessage("");
-      } else {
-        setPassMessage("Face image updated successfully!");
-        // Update local state if needed or rely on next fetch
-        useAppStore.getState().bootstrap();
-      }
-      
+
+      setPassMessage("Face image updated successfully!");
+      useAppStore.getState().bootstrap();
       setChanging(false);
-    } catch(err: any) {
+    } catch (err: any) {
       setPassError(err.message || "Failed to process image.");
       setPassMessage("");
       setChanging(false);
@@ -3086,7 +3029,7 @@ export function ProfileView() {
       <PageHeader
         eyebrow="Account"
         title="Your profile"
-        description="Profile and trusted-device data from Supabase."
+        description="Profile and trusted-device data from the AttendX database."
       />
       <div className="profile-grid">
         <section className="panel profile-card">
@@ -3140,7 +3083,11 @@ export function ProfileView() {
             {profile.enrollment_photo_path && (
               <div className="mt-4">
                 <p className="text-sm font-medium mb-2">Current Verified Face:</p>
-                <img src={profile.enrollment_photo_path} alt="Face" style={{ width: 100, height: 100, borderRadius: 8, objectFit: 'cover' }} />
+                <img
+                  src={profile.enrollment_photo_path.startsWith('data:') || profile.enrollment_photo_path.startsWith('http') ? profile.enrollment_photo_path : `${getLocalServerUrl()}${profile.enrollment_photo_path}`}
+                  alt="Face"
+                  style={{ width: 100, height: 100, borderRadius: 8, objectFit: 'cover' }}
+                />
               </div>
             )}
           </div>
@@ -3210,10 +3157,9 @@ export function ProfileView() {
 }
 
 export function InvitationCodesView() {
-  const result = useLoad([] as any[], () => rows<any>(supabase!.from('join_tokens').select('id, token_type, expires_at, is_active, created_at, max_uses, use_count, token_hash, batches(name), profiles!join_tokens_created_by_fkey(full_name)').order('created_at', { ascending: false })), []);
-  
+  const result = useLoad([] as any[], () => rows<any>(supabase.from('join_tokens').select('*').order('created_at', { ascending: false })), []);
+
   const discard = async (id: string) => {
-    if (!supabase) return;
     const { error } = await supabase.from('join_tokens').update({ is_active: false }).eq('id', id);
     if (!error) result.reload();
   };
@@ -3229,10 +3175,10 @@ export function InvitationCodesView() {
             <tbody>
               {result.data.map((item) => (
                 <tr key={item.id}>
-                  <td>{new Date(item.created_at).toLocaleString()}</td>
-                  <td>{item.token_type}</td>
-                  <td>{item.batches?.name || 'General'}</td>
-                  <td>{item.use_count} / {item.max_uses}</td>
+                  <td>{formatDate(item.created_at)}</td>
+                  <td>{item.token_type || 'batch_join'}</td>
+                  <td>{item.batches?.name || item.batches?.code || 'General'}</td>
+                  <td>{item.use_count ?? 0} / {item.max_uses ?? '∞'}</td>
                   <td><span className={`status ${item.is_active ? 'status-present' : 'status-pending_review'}`}>{item.is_active ? 'Active' : 'Expired/Used'}</span></td>
                   <td>
                     {item.is_active && (
@@ -3245,6 +3191,283 @@ export function InvitationCodesView() {
           </table>
         </section>
       </DataState>
+    </>
+  );
+}
+
+// ── Attendance queries / complaints with tracking numbers ─────────────
+
+type AttendanceQuery = {
+  id: string;
+  tracking_id: string;
+  student_name?: string;
+  student_email?: string;
+  student_identifier?: string;
+  class_label?: string | null;
+  type: string;
+  message: string;
+  status: string;
+  admin_note?: string;
+  email_sent?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  resolved_at?: string | null;
+};
+
+const QUERY_TYPES = [
+  { value: 'not_marked', label: 'Attendance not marked' },
+  { value: 'wrong_status', label: 'Wrong status recorded' },
+  { value: 'location_issue', label: 'Location / GPS problem' },
+  { value: 'other', label: 'Other issue' },
+];
+
+function QueryStatusPill({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    open: 'status-flagged',
+    in_review: 'status-pending_review',
+    resolved: 'status-present',
+    rejected: 'status-rejected',
+  };
+  return <span className={`status ${map[status] || 'status-pending_review'}`}>{status.replace('_', ' ')}</span>;
+}
+
+export function AttendanceQueriesView() {
+  const { role, profile } = useAppStore();
+  const isAdmin = role === 'admin';
+  const result = useLoad(
+    [] as AttendanceQuery[],
+    async () => {
+      const token = localStorage.getItem('attendx_auth_token') || '';
+      const res = await fetch(`${getLocalServerUrl()}/api/queries`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load queries');
+      return res.json() as Promise<AttendanceQuery[]>;
+    },
+    [role, profile.id],
+  );
+  const [message, setMessage] = useState('');
+  const [form, setForm] = useState({ classId: '', type: 'not_marked', details: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [lastTracking, setLastTracking] = useState('');
+  const [trackLookup, setTrackLookup] = useState('');
+  const [trackResult, setTrackResult] = useState<any>(null);
+  const [resolving, setResolving] = useState<Record<string, string>>({});
+
+  const classes = useLoad([] as DbClass[], () => loadClasses(role, profile.id), [role, profile.id]);
+
+  const raise = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setMessage('');
+    try {
+      const cls = classes.data.find((c) => c.id === form.classId);
+      const token = localStorage.getItem('attendx_auth_token') || '';
+      const res = await fetch(`${getLocalServerUrl()}/api/queries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          classId: form.classId || undefined,
+          classLabel: cls ? `${cls.name} (${cls.code})` : undefined,
+          type: form.type,
+          message: form.details,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not raise the query');
+      setLastTracking(data.trackingId);
+      setForm({ classId: '', type: 'not_marked', details: '' });
+      result.reload();
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
+    setSubmitting(false);
+  };
+
+  const track = async () => {
+    setTrackResult(null);
+    if (!trackLookup.trim()) return;
+    try {
+      const res = await fetch(`${getLocalServerUrl()}/api/queries/track/${encodeURIComponent(trackLookup.trim())}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Not found');
+      setTrackResult(data);
+    } catch (err) {
+      setTrackResult({ error: (err as Error).message });
+    }
+  };
+
+  const resolve = async (item: AttendanceQuery, status: 'resolved' | 'rejected') => {
+    try {
+      const token = localStorage.getItem('attendx_auth_token') || '';
+      const res = await fetch(`${getLocalServerUrl()}/api/queries/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status, adminNote: resolving[item.id] || '' }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not update the query');
+      setMessage(`Query ${data.trackingId} marked ${status}. The student has been emailed.`);
+      result.reload();
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="Attendance support"
+        title={isAdmin ? 'Attendance queries' : 'Raise an attendance query'}
+        description={
+          isAdmin
+            ? 'Student complaints with tracking numbers. Resolving emails the student automatically.'
+            : 'Report a missing or incorrect attendance record. You will receive a request number by email.'
+        }
+      />
+      {message && <div className="session-banner"><CheckCircle2 size={18} />{message}</div>}
+
+      {!isAdmin && (
+        <section className="panel" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
+          <div className="panel-head" style={{ padding: '0 0 12px', borderBottom: '1px solid var(--line)' }}>
+            <div>
+              <p className="eyebrow">New complaint</p>
+              <h2>Describe your attendance issue</h2>
+            </div>
+            <MailQuestion size={20} />
+          </div>
+          {lastTracking && (
+            <div className="pending-box" style={{ marginTop: '1rem' }}>
+              <CheckCircle2 size={20} />
+              <div>
+                <strong>Query raised — request number {lastTracking}</strong>
+                <small>"This student's query has been raised and it will be resolved by the request number." A confirmation email was sent to {profile.email}.</small>
+              </div>
+            </div>
+          )}
+          <form className="form-body" style={{ padding: '1rem 0 0' }} onSubmit={raise}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <label className="field-label">
+                Class (optional)
+                <select className="text-input" value={form.classId} onChange={(e) => setForm({ ...form, classId: e.target.value })}>
+                  <option value="">Not class specific</option>
+                  {classes.data.map((c) => (
+                    <option key={c.id} value={c.id}>{c.code} · {c.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field-label">
+                Issue type
+                <select className="text-input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+                  {QUERY_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="field-label">
+              Details
+              <textarea
+                className="text-input"
+                style={{ minHeight: '90px', paddingTop: '10px', resize: 'vertical' }}
+                value={form.details}
+                onChange={(e) => setForm({ ...form, details: e.target.value })}
+                placeholder="Explain what happened — e.g. your attendance was not marked even though you scanned the QR code."
+                required
+              />
+            </label>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? <LoaderCircle className="spin" size={17} /> : <MailQuestion size={17} />}
+              Raise query &amp; get request number
+            </Button>
+          </form>
+        </section>
+      )}
+
+      <section className="panel" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
+        <div className="panel-head" style={{ padding: '0 0 12px', borderBottom: '1px solid var(--line)' }}>
+          <div>
+            <p className="eyebrow">Tracking</p>
+            <h2>Track by request number</h2>
+          </div>
+          <ShieldCheckIcon size={20} />
+        </div>
+        <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+          <input
+            className="text-input"
+            style={{ maxWidth: '280px' }}
+            value={trackLookup}
+            onChange={(e) => setTrackLookup(e.target.value)}
+            placeholder="ATX-Q-XXXXXX"
+          />
+          <Button variant="secondary" onClick={track} disabled={!trackLookup.trim()}>Track status</Button>
+        </div>
+        {trackResult && (
+          trackResult.error ? (
+            <div className="inline-error" style={{ marginTop: '0.75rem' }}><AlertTriangle size={16} />{trackResult.error}</div>
+          ) : (
+            <div style={{ marginTop: '0.75rem', padding: '0.9rem', border: '1px solid var(--line)', borderRadius: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <strong>{trackResult.tracking_id}</strong>
+                <QueryStatusPill status={trackResult.status} />
+              </div>
+              <small style={{ display: 'block', marginTop: '6px', color: 'var(--muted)' }}>
+                {QUERY_TYPES.find((t) => t.value === trackResult.type)?.label || trackResult.type}
+                {trackResult.class_label ? ` · ${trackResult.class_label}` : ''}
+                {trackResult.created_at ? ` · raised ${formatDate(trackResult.created_at)}` : ''}
+              </small>
+              {trackResult.admin_note && <small style={{ display: 'block', marginTop: '6px' }}>Admin note: {trackResult.admin_note}</small>}
+            </div>
+          )
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <p className="eyebrow">{isAdmin ? 'Support queue' : 'Your queries'}</p>
+            <h2>{result.data.length} {result.data.length === 1 ? 'query' : 'queries'}</h2>
+          </div>
+          <button className="text-button" onClick={result.reload}>Refresh</button>
+        </div>
+        <DataState loading={result.loading} error={result.error} empty={!result.data.length}>
+          <div style={{ padding: '0.5rem 1rem 1rem' }}>
+            {result.data.map((item) => (
+              <div key={item.id} style={{ padding: '1rem', border: '1px solid var(--line)', borderRadius: '8px', marginBottom: '0.6rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <strong style={{ fontFamily: 'monospace', fontSize: '0.95rem' }}>{item.tracking_id}</strong>
+                  <QueryStatusPill status={item.status} />
+                </div>
+                {isAdmin && (
+                  <small style={{ display: 'block', marginTop: '4px', color: 'var(--muted)' }}>
+                    {item.student_name} ({item.student_identifier}) · {item.student_email}
+                  </small>
+                )}
+                <small style={{ display: 'block', marginTop: '4px', color: 'var(--muted)' }}>
+                  {QUERY_TYPES.find((t) => t.value === item.type)?.label || item.type}
+                  {item.class_label ? ` · ${item.class_label}` : ''}
+                  {item.created_at ? ` · ${formatDate(item.created_at)}` : ''}
+                </small>
+                <p style={{ margin: '8px 0 0', fontSize: '0.9rem' }}>{item.message}</p>
+                {item.admin_note && <small style={{ display: 'block', marginTop: '6px', color: 'var(--green)' }}>Admin note: {item.admin_note}</small>}
+                {isAdmin && (item.status === 'open' || item.status === 'in_review') && (
+                  <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+                    <input
+                      className="text-input"
+                      style={{ flex: 1, minWidth: '200px' }}
+                      placeholder="Resolution note (included in the email)"
+                      value={resolving[item.id] || ''}
+                      onChange={(e) => setResolving({ ...resolving, [item.id]: e.target.value })}
+                    />
+                    <Button onClick={() => resolve(item, 'resolved')}><Check size={16} />Resolve</Button>
+                    <Button variant="danger" onClick={() => resolve(item, 'rejected')}><X size={16} />Reject</Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </DataState>
+      </section>
     </>
   );
 }

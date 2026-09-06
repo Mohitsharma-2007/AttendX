@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import type { Profile, Role, Session } from './types'
-import { supabase } from './lib/supabase'
+import { apiClient } from './lib/apiClient'
+
+const api = apiClient
 
 const emptyProfiles: Record<Role, Profile> = {
   student: { id: '', full_name: '', role: 'student', identifier: '', email: '', department: '' },
@@ -22,34 +24,62 @@ interface AppState {
 }
 
 function normalizeProfile(row: any): Profile {
-  return { id: row.id, full_name: row.full_name, role: row.role, identifier: row.identifier, email: row.email, department: row.department ?? '', avatar: row.avatar_path, must_change_password: row.must_change_password, approval_status: row.approval_status }
+  const role = isRole(row?.role) ? row.role : 'student'
+  const email = text(row?.email)
+  return {
+    id: text(row?.id),
+    full_name: text(row?.full_name, email.split('@')[0] || 'AttendX user'),
+    role,
+    identifier: text(row?.identifier, '—'),
+    email,
+    department: text(row?.department),
+    avatar: text(row?.avatar_path) || undefined,
+    must_change_password: Boolean(row?.must_change_password),
+    approval_status: text(row?.approval_status) || undefined,
+  }
+}
+
+function text(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback
+}
+
+function isRole(value: unknown): value is Role {
+  return value === 'student' || value === 'faculty' || value === 'admin'
 }
 
 export const useAppStore = create<AppState>((set) => ({
   role: 'student', profile: emptyProfiles.student, authenticated: false, authLoading: true, activeSession: null,
   signIn: async (email, password, expectedRole) => {
-    if (!supabase) {
-      set({ role: expectedRole, profile: emptyProfiles[expectedRole], authenticated: true, authLoading: false })
+    try {
+      const { data, error } = await api.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
+      if (error || !data.user) return error?.message ?? 'Sign in failed'
+      const { data: row, error: profileError } = await api.from('profiles').select('*').eq('id', data.user.id).single()
+      if (profileError || !row) { await api.auth.signOut(); return 'Your AttendX profile is not configured. Contact an administrator.' }
+      if (!row.is_active) { await api.auth.signOut(); return 'This account has been deactivated.' }
+      if (!isRole(row.role) || row.role !== expectedRole) { await api.auth.signOut(); return 'Invalid login credentials for this workspace.' }
+      set({ role: row.role, profile: normalizeProfile(row), authenticated: true, authLoading: false })
       return null
+    } catch {
+      set({ authenticated: false, authLoading: false })
+      return 'We could not complete sign in. Check your connection and try again.'
     }
-    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
-    if (error || !data.user) return error?.message ?? 'Sign in failed'
-    const { data: row, error: profileError } = await supabase.from('profiles').select('*').eq('id', data.user.id).single()
-    if (profileError || !row) { await supabase.auth.signOut(); return 'Your AttendX profile is not configured. Contact an administrator.' }
-    if (!row.is_active) { await supabase.auth.signOut(); return 'This account has been deactivated.' }
-    if (row.role !== expectedRole) { await supabase.auth.signOut(); return 'Invalid login credentials for this workspace.' }
-    set({ role: row.role, profile: normalizeProfile(row), authenticated: true, authLoading: false })
-    return null
   },
   bootstrap: async () => {
-    if (!supabase) { set({ authLoading: false }); return }
-    const { data } = await supabase.auth.getSession()
-    if (!data.session?.user) { set({ authenticated: false, authLoading: false }); return }
-    const { data: row } = await supabase.from('profiles').select('*').eq('id', data.session.user.id).maybeSingle()
-    if (!row?.is_active) { await supabase.auth.signOut(); set({ authenticated: false, authLoading: false }); return }
-    set({ role: row.role, profile: normalizeProfile(row), authenticated: true, authLoading: false })
+    try {
+      const { data } = await api.auth.getSession()
+      if (!data.session?.user) { set({ authenticated: false, authLoading: false }); return }
+      const { data: row } = await api.from('profiles').select('*').eq('id', data.session.user.id).maybeSingle()
+      if (!row?.is_active || !isRole(row.role)) {
+        await api.auth.signOut()
+        set({ role: 'student', profile: emptyProfiles.student, authenticated: false, authLoading: false })
+        return
+      }
+      set({ role: row.role, profile: normalizeProfile(row), authenticated: true, authLoading: false })
+    } catch {
+      set({ role: 'student', profile: emptyProfiles.student, authenticated: false, authLoading: false })
+    }
   },
-  signOut: async () => { if (supabase) await supabase.auth.signOut(); set({ authenticated: false, authLoading: false, activeSession: null }) },
+  signOut: async () => { await api.auth.signOut(); set({ role: 'student', profile: emptyProfiles.student, authenticated: false, authLoading: false, activeSession: null }) },
   setMustChangePassword: (value) => set((state) => ({ profile: { ...state.profile, must_change_password: value } })),
   setSession: (activeSession) => set({ activeSession })
 }))

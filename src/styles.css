@@ -43,6 +43,10 @@
 .camera-close { position: absolute; z-index: 2; top: 18px; right: 18px; color: white; background: rgba(0,0,0,.5); }
 .camera-close:hover { background: rgba(0,0,0,.72); }
 .app-loading { display: flex; min-height: 100vh; flex-direction: column; align-items: center; justify-content: center; gap: 20px; color: var(--green); background: var(--sidebar); }
+.app-failure { display: flex; min-height: 100vh; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 28px; color: var(--ink); background: #f4f7f5; text-align: center; }
+.app-failure-icon { display: grid; width: 58px; height: 58px; place-items: center; border: 1px solid #f5c9c6; border-radius: 50%; color: var(--rose); background: #fff3f2; }
+.app-failure h1 { margin: 4px 0 0; font-size: 22px; }
+.app-failure p { max-width: 380px; margin: 0 0 5px; color: var(--muted); font-size: 13px; line-height: 1.55; }
 .password-change-page { display: grid; min-height: 100vh; place-items: center; padding: 20px; }
 .password-change-card { width: min(460px, 100%); padding: 30px; border: 1px solid var(--line); border-radius: 7px; background: white; text-align: center; }
 .password-change-card > p { color: var(--muted); font-size: 11px; line-height: 1.6; }

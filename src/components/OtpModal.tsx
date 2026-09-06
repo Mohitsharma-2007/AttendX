@@ -8,10 +8,12 @@ interface OtpModalProps {
   purpose?: 'login' | 'signup' | 'password_reset' | 'general';
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  /** Called when the code verifies. For password_reset the verified code is passed back so the reset can be completed. */
+  onSuccess?: () => void;
+  onVerified?: (code: string) => void;
 }
 
-export function OtpModal({ email, purpose = 'login', isOpen, onClose, onSuccess }: OtpModalProps) {
+export function OtpModal({ email, purpose = 'login', isOpen, onClose, onSuccess, onVerified }: OtpModalProps) {
   const [digits, setDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
@@ -94,7 +96,8 @@ export function OtpModal({ email, purpose = 'login', isOpen, onClose, onSuccess 
       } else {
         setSuccessMsg('Code verified successfully!');
         setTimeout(() => {
-          onSuccess();
+          if (onVerified) onVerified(codeStr);
+          else onSuccess?.();
         }, 600);
       }
     } catch (err) {

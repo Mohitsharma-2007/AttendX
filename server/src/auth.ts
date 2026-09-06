@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { query, getOne, execute, hashPassword, verifyPassword } from './db.js';
 import { extractFaceEmbedding } from './localAi.js';
+import { uploadsDirectory } from './runtimePaths.js';
 
-const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads');
+const UPLOADS_DIR = uploadsDirectory;
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -44,6 +45,24 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
   }
 
   (req as any).user = user;
+  next();
+}
+
+/**
+ * Attaches req.user when a valid session token is present, but never rejects
+ * the request. Used on read-only endpoints that can personalize results when
+ * credentials are supplied (e.g. per-student summary views).
+ */
+export async function authenticateOptional(req: Request, _res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (authHeader) {
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const session = activeSessions.get(token);
+    if (session && session.expiresAt > Date.now()) {
+      const user = await getOne('SELECT * FROM profiles WHERE id = ? AND is_active = 1', [session.userId]);
+      if (user) (req as any).user = user;
+    }
+  }
   next();
 }
 
@@ -111,21 +130,25 @@ export async function handleLogin(req: Request, res: Response) {
 
 export async function handleSignup(req: Request, res: Response) {
   try {
-    const {
-      fullName,
-      email,
-      password,
-      role,
-      identifier,
-      department,
-      inviteToken,
-      identityImage,
-      idCardFront,
-      idCardBack,
-    } = req.body;
+    // Accept both legacy field names and the live client payload.
+    const b = req.body || {};
+    const fullName = b.fullName || b.full_name;
+    const email = b.email;
+    const password = b.password;
+    const role = b.role === 'faculty' ? 'faculty' : 'student';
+    const identifier = b.identifier;
+    const department = b.department;
+    const inviteToken = b.inviteToken || b.invite_token;
+    const identityImage = b.identityImage || (b.identityPhotoDataUrl ? { dataUrl: b.identityPhotoDataUrl } : null);
+    const idCardFront = b.idCardFront || (b.idCardFrontDataUrl ? { dataUrl: b.idCardFrontDataUrl } : null);
+    const idCardBack = b.idCardBack || (b.idCardBackDataUrl ? { dataUrl: b.idCardBackDataUrl } : null);
 
     if (!email || !password || !fullName || !role) {
       res.status(400).json({ error: 'Full name, email, password, and role are required' });
+      return;
+    }
+    if (String(password).length < 12) {
+      res.status(400).json({ error: 'Password must be at least 12 characters' });
       return;
     }
 
@@ -154,7 +177,7 @@ export async function handleSignup(req: Request, res: Response) {
       backPath = saveBase64Image(idCardBack.dataUrl, `profiles/${userId}`, 'id-back');
     }
 
-    const initialApproval = role === 'student' ? 'approved' : 'pending_approval';
+    const initialApproval = role === 'student' ? 'approved' : 'pending';
 
     await execute(
       `INSERT INTO profiles (id, email, full_name, role, identifier, department, approval_status, is_active, password_hash)

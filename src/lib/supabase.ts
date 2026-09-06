@@ -1,4 +1,6 @@
-// AttendX Native Client - Offline-first, SQLite, and MongoDB Atlas support
+// AttendX API client — talks to the AttendX server (Express + MongoDB/SQLite).
+// Every data view in the app goes through this Supabase-compatible query
+// builder, but nothing here connects to Supabase any more.
 
 export function getLocalServerUrl(): string {
   if (typeof window !== 'undefined') {
@@ -76,11 +78,16 @@ const DEMO_CLASS = {
   code: 'CS401',
   batch_id: 'demo-batch-001',
   geofence_lat: 28.6139,
-  geofence_lng: 77.2090,
+  geofence_lng: 77.209,
   geofence_radius_m: 100,
   is_active: 1,
   publication_status: 'published',
+  class_schedules: [
+    { id: 'demo-schedule-001', class_id: 'demo-class-001', session_date: new Date().toISOString().split('T')[0], start_time: '09:00', end_time: '10:00', room: 'TBA' },
+  ],
 };
+
+const DEMO_ENROLLMENT = { id: 'demo-enroll-001', batch_id: DEMO_BATCH.id, class_id: DEMO_CLASS.id, student_id: 'demo-stu-001', status: 'active' };
 
 class LocalQueryBuilder implements PromiseLike<any> {
   private table: string;
@@ -98,6 +105,7 @@ class LocalQueryBuilder implements PromiseLike<any> {
     this.action = 'select';
     this.queryParams['select'] = fields;
     if (options?.count) this.queryParams['count'] = options.count;
+    if (options?.head) this.queryParams['head'] = 'true';
     return this;
   }
 
@@ -119,7 +127,7 @@ class LocalQueryBuilder implements PromiseLike<any> {
   }
 
   eq(column: string, value: any) {
-    // Send raw value — data.ts now accepts both raw and eq.-prefixed
+    // Send raw value — data.ts accepts both raw and eq.-prefixed values
     this.queryParams[column] = String(value);
     return this;
   }
@@ -184,9 +192,9 @@ class LocalQueryBuilder implements PromiseLike<any> {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    // Build query string, excluding internal control params from filter keys
     const filterParams = new URLSearchParams();
     for (const [key, val] of Object.entries(this.queryParams)) {
+      if (key === 'select' || key === 'head') continue;
       filterParams.set(key, val);
     }
     const qs = filterParams.toString();
@@ -207,27 +215,34 @@ class LocalQueryBuilder implements PromiseLike<any> {
       if (res.ok) {
         const json = await res.json();
         let data = json;
+        let count: number | undefined;
 
         if (this.isSingle) {
           data = Array.isArray(json) ? json[0] || null : json;
           if (!data) return { data: null, error: { message: 'Row not found' } };
         } else if (this.isMaybeSingle) {
           data = Array.isArray(json) ? json[0] || null : json;
+        } else if (!Array.isArray(json) && this.queryParams['count'] === 'exact') {
+          // head:true count responses come back as { count: N }
+          count = Number(json?.count || 0);
+          data = [];
         }
 
-        return { data, error: null };
+        return { data, error: null, count };
       }
 
-      // Non-OK response — try to extract error message
+      // Non-OK response — surface the server error message
       const errBody = await res.json().catch(() => ({}));
-      if (res.status !== 401) {
-        return { data: null, error: { message: errBody.error || `Request failed (${res.status})` } };
-      }
+      return { data: null, error: { message: errBody.error || `Request failed (${res.status})` } };
     } catch {
-      // Server unreachable - proceed to fallback demo mock data
+      // Server unreachable — fall through to demo data for offline preview
     }
 
-    // Fallback Mock Data Engine for offline / standalone preview
+    // Fallback Demo Data Engine for offline / standalone preview
+    if (this.action !== 'select') {
+      return { data: null, error: { message: 'AttendX server is unreachable. Start the server and try again.' } };
+    }
+
     if (this.table === 'profiles') {
       const storedProfile = typeof window !== 'undefined' ? localStorage.getItem('attendx_profile') : null;
       if (storedProfile) {
@@ -245,7 +260,6 @@ class LocalQueryBuilder implements PromiseLike<any> {
         } catch {}
       }
 
-      // Check default demo profiles
       const idMatch = Object.values(DEMO_PROFILES).find((p) => p.id === this.queryParams['id']);
       if (idMatch) return { data: idMatch, error: null };
       const emailMatch = Object.values(DEMO_PROFILES).find((p) => p.email === this.queryParams['email']);
@@ -264,16 +278,37 @@ class LocalQueryBuilder implements PromiseLike<any> {
     }
 
     if (this.table === 'batch_members' || this.table === 'enrollments') {
-      const demoEnroll = { id: 'demo-enroll-001', batch_id: DEMO_BATCH.id, class_id: DEMO_CLASS.id, student_id: 'demo-stu-001', status: 'active' };
-      return { data: this.isSingle ? demoEnroll : [demoEnroll], error: null };
+      return { data: this.isSingle ? DEMO_ENROLLMENT : [DEMO_ENROLLMENT], error: null };
+    }
+
+    if (this.table === 'student_attendance_summary') {
+      return {
+        data: [
+          {
+            class_id: DEMO_CLASS.id,
+            class_code: DEMO_CLASS.code,
+            class_name: DEMO_CLASS.name,
+            completed_sessions: 8,
+            sessions_present: 7,
+            attendance_percentage: 87.5,
+          },
+        ],
+        error: null,
+      };
+    }
+
+    if (this.table === 'faculty_assignments') {
+      return { data: [{ faculty_id: 'demo-fac-001', batch_id: DEMO_BATCH.id, is_active: 1, batches: DEMO_BATCH }], error: null };
     }
 
     if (this.table === 'system_settings') {
-      const settings = [
-        { key: 'web_attendance_enabled', value: 'true' },
-        { key: 'identity_document_required', value: 'false' },
-      ];
-      return { data: settings, error: null };
+      return {
+        data: [
+          { key: 'web_attendance_enabled', value: 'true', description: 'Allow attendance marking from web browsers' },
+          { key: 'identity_document_required', value: 'false', description: 'Require ID card captures during signup' },
+        ],
+        error: null,
+      };
     }
 
     return { data: this.isSingle ? null : [], error: null };
@@ -287,7 +322,7 @@ class LocalQueryBuilder implements PromiseLike<any> {
   }
 }
 
-function createLocalClient() {
+function createApiClient() {
   return {
     from: (table: string) => new LocalQueryBuilder(table),
 
@@ -309,7 +344,6 @@ function createLocalClient() {
             }
             return { data: { user: data.user, session: { access_token: data.access_token, user: data.user } }, error: null };
           }
-          // Server returned error — show it
           if (data.error) {
             return { data: { user: null, session: null }, error: { message: data.error } };
           }
@@ -317,7 +351,6 @@ function createLocalClient() {
           // Network failed or local server not running -> check built-in demo fallback
         }
 
-        // Demo Account Fallback (Offline / Vercel Preview / First Time Run)
         const demo = DEMO_PROFILES[normEmail];
         const passMap: Record<string, string> = {
           'admin@attendx.edu': 'Admin@123456',
@@ -393,10 +426,10 @@ function createLocalClient() {
   };
 }
 
-const localClient = createLocalClient();
+const localClient = createApiClient();
 
-// Native AttendX Data & Auth Client
+// AttendX Data & Auth Client (kept as named exports for existing imports)
 export const apiClient = localClient;
-export const supabase: any = localClient;
+export const supabase = localClient; // legacy alias, points at the AttendX API
 export const isSupabaseConfigured = false;
 export const isLocalServerActive = true;

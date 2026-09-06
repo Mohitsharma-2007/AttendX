@@ -1,18 +1,19 @@
 import { Capacitor } from '@capacitor/core'
 import type { LucideIcon } from 'lucide-react'
-import { Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, ClipboardCheck, Grid2X2, History, KeyRound, LogOut, Menu, QrCode, Server, Settings, ShieldCheck, Smartphone, Users, X, Database } from 'lucide-react'
+import { Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, ClipboardCheck, Grid2X2, History, KeyRound, LifeBuoy, LogOut, Menu, QrCode, Server, Settings, ShieldCheck, Smartphone, Users, X, Database } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { Role } from '../types'
 import { useAppStore } from '../store'
 import { Initials, Logo, Button } from './ui'
-import { getLocalServerUrl, setLocalServerUrl } from '../lib/supabase'
+import { getLocalServerUrl, setLocalServerUrl } from '../lib/apiClient'
+import { UpdateBanner } from './UpdateBanner'
 
-export type ViewKey = 'home' | 'mark' | 'history' | 'classes' | 'session' | 'people' | 'passwords' | 'review' | 'settings' | 'invites' | 'profile'
+export type ViewKey = 'home' | 'mark' | 'history' | 'classes' | 'session' | 'people' | 'passwords' | 'review' | 'settings' | 'invites' | 'profile' | 'queries'
 type Nav = { key: ViewKey; label: string; icon: LucideIcon }
 const navByRole: Record<Role, Nav[]> = {
-  student: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'mark', label: 'Mark attendance', icon: QrCode }, { key: 'classes', label: 'My classes', icon: BookOpen }, { key: 'history', label: 'History', icon: History }],
+  student: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'mark', label: 'Mark attendance', icon: QrCode }, { key: 'classes', label: 'My classes', icon: BookOpen }, { key: 'queries', label: 'Attendance help', icon: LifeBuoy }, { key: 'history', label: 'History', icon: History }],
   faculty: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'session', label: 'Live session', icon: QrCode }, { key: 'classes', label: 'My classes', icon: BookOpen }, { key: 'history', label: 'Attendance', icon: ClipboardCheck }],
-  admin: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'people', label: 'People', icon: Users }, { key: 'passwords', label: 'Password requests', icon: KeyRound }, { key: 'classes', label: 'Classes', icon: CalendarDays }, { key: 'review', label: 'Review queue', icon: ShieldCheck }, { key: 'history', label: 'Records', icon: ClipboardCheck }, { key: 'settings', label: 'Settings', icon: Settings }]
+  admin: [{ key: 'home', label: 'Overview', icon: Grid2X2 }, { key: 'people', label: 'People', icon: Users }, { key: 'passwords', label: 'Password requests', icon: KeyRound }, { key: 'classes', label: 'Classes', icon: CalendarDays }, { key: 'review', label: 'Review queue', icon: ShieldCheck }, { key: 'queries', label: 'Attendance queries', icon: LifeBuoy }, { key: 'history', label: 'Records', icon: ClipboardCheck }, { key: 'settings', label: 'Settings', icon: Settings }]
 }
 
 export function Shell({ view, setView, children }: { view: ViewKey; setView: (view: ViewKey) => void; children: ReactNode }) {
@@ -63,7 +64,7 @@ export function Shell({ view, setView, children }: { view: ViewKey; setView: (vi
           <button className="compact-profile" onClick={() => select('profile')}><Initials name={profile.full_name} size="sm"/><span>{profile.full_name.split(' ')[0]}</span></button>
         </div>
       </header>
-      <div className="content">{children}</div>
+      <div className="content"><UpdateBanner />{children}</div>
     </main>
     <nav className="mobile-nav">{nav.slice(0, 4).map(({ key, label, icon: Icon }) => <button key={key} className={view === key ? 'active' : ''} onClick={() => select(key)}><Icon size={20}/><span>{label.replace(' attendance', '')}</span></button>)}<button className={view === 'profile' ? 'active' : ''} onClick={() => select('profile')}><CircleUserRound size={20}/><span>Profile</span></button></nav>
 

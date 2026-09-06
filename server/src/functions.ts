@@ -151,7 +151,7 @@ export async function handleIssueQr(req: Request, res: Response) {
 export async function handleSubmitAttendance(req: Request, res: Response) {
   try {
     const user = (req as any).user;
-    const body = req.body;
+    const body = req.body || {};
 
     const parsed = parseQrToken(body.token);
     if (!parsed) {
@@ -168,11 +168,24 @@ export async function handleSubmitAttendance(req: Request, res: Response) {
       return;
     }
 
+    if (user.role !== 'student') {
+      res.status(403).json({ error: 'Only students can submit attendance' });
+      return;
+    }
+
     const session = await getOne('SELECT * FROM attendance_sessions WHERE id = ?', [parsed.sessionId]);
     if (!session || session.status !== 'active') {
       res.status(409).json({ error: 'Attendance session has ended or is not found' });
       return;
     }
+
+    // Reject replayed QR tokens: each nonce may be redeemed once
+    const nonceUsed = await getOne('SELECT id FROM qr_tokens WHERE nonce = ? AND use_count > 0', [parsed.nonce]);
+    if (nonceUsed) {
+      res.status(409).json({ error: 'This QR code has already been used. Scan the current code shown by faculty.' });
+      return;
+    }
+    await execute('UPDATE qr_tokens SET use_count = use_count + 1 WHERE nonce = ?', [parsed.nonce]);
 
     // Check enrollment
     let enrollment = await getOne('SELECT id FROM enrollments WHERE class_id = ? AND student_id = ?', [session.class_id, user.id]);
@@ -215,10 +228,14 @@ export async function handleSubmitAttendance(req: Request, res: Response) {
     if (!device) {
       const deviceId = crypto.randomUUID();
       await execute(
-        `INSERT INTO devices (id, user_id, device_uuid, platform, model, is_trusted) VALUES (?, ?, ?, ?, ?, 1)`,
-        [deviceId, user.id, deviceUuid, body.device?.platform || 'web', body.device?.model || 'Generic']
+        `INSERT INTO devices (id, user_id, device_uuid, platform, model, is_trusted, integrity_verdict, last_seen_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        [deviceId, user.id, deviceUuid, body.device?.platform || 'web', body.device?.model || 'Generic',
+         JSON.stringify(body.device?.integrity || body.integrity || {}), new Date().toISOString()]
       );
       device = { id: deviceId };
+    } else {
+      await execute('UPDATE devices SET last_seen_at = ?, integrity_verdict = ? WHERE id = ?',
+        [new Date().toISOString(), JSON.stringify(body.device?.integrity || body.integrity || {}), device.id]);
     }
 
     // Face verification & Classroom Vision Analysis via Local Zero-Key Model
@@ -236,12 +253,13 @@ export async function handleSubmitAttendance(req: Request, res: Response) {
     }
 
     const recordId = crypto.randomUUID();
+    const markedAt = new Date().toISOString();
     await execute(
       `INSERT INTO attendance_records (
         id, session_id, student_id, gps_lat, gps_lng, gps_accuracy_m, distance_from_center_m,
-        selfie_path, classroom_photo_path, device_id, status, rejection_reason, evidence_review_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      [recordId, session.id, user.id, latitude, longitude, accuracy, distance, selfiePath, classroomPath, device.id, status, rejectionReason]
+        selfie_path, classroom_photo_path, device_id, status, rejection_reason, evidence_review_status, marked_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?)`,
+      [recordId, session.id, user.id, latitude, longitude, accuracy, distance, selfiePath, classroomPath, device.id, status, rejectionReason, markedAt]
     );
 
     const attendance = await getOne('SELECT * FROM attendance_records WHERE id = ?', [recordId]);
@@ -258,15 +276,27 @@ export async function handleSubmitAttendance(req: Request, res: Response) {
 export async function handleJoinBatch(req: Request, res: Response) {
   try {
     const user = (req as any).user;
-    const { token } = req.body;
+    const { token } = req.body || {};
     if (!token) {
       res.status(400).json({ error: 'Join token is required' });
       return;
     }
 
-    const joinRow = await getOne('SELECT * FROM join_tokens WHERE token = ? AND is_active = 1', [token]);
+    const joinRow = await getOne('SELECT * FROM join_tokens WHERE token = ? AND is_active = 1', [token.trim().toUpperCase()]);
     if (!joinRow) {
       res.status(404).json({ error: 'Invalid or expired join token' });
+      return;
+    }
+    if (joinRow.expires_at && new Date(joinRow.expires_at).getTime() < Date.now()) {
+      res.status(404).json({ error: 'This join code has expired. Ask your faculty for a new one.' });
+      return;
+    }
+    if (joinRow.max_uses && Number(joinRow.use_count || 0) >= Number(joinRow.max_uses)) {
+      res.status(404).json({ error: 'This join code has reached its usage limit' });
+      return;
+    }
+    if (user.role !== 'student') {
+      res.status(403).json({ error: 'Only student accounts can join a batch' });
       return;
     }
 
@@ -275,12 +305,17 @@ export async function handleJoinBatch(req: Request, res: Response) {
 
     let enrolledCount = 0;
     for (const cls of classes) {
-      await execute(
+      const result = await execute(
         `INSERT OR IGNORE INTO enrollments (id, class_id, student_id, status) VALUES (?, ?, ?, 'active')`,
         [crypto.randomUUID(), cls.id, user.id]
       );
-      enrolledCount++;
+      enrolledCount += result.changes;
     }
+    await execute(
+      `INSERT OR IGNORE INTO batch_members (id, batch_id, student_id, status) VALUES (?, ?, ?, 'active')`,
+      [crypto.randomUUID(), joinRow.batch_id, user.id]
+    );
+    await execute('UPDATE join_tokens SET use_count = use_count + 1 WHERE id = ?', [joinRow.id]);
 
     res.json({ success: true, batch, enrolledCount });
   } catch (err) {
@@ -290,21 +325,38 @@ export async function handleJoinBatch(req: Request, res: Response) {
 
 export async function handleGenerateJoinQr(req: Request, res: Response) {
   try {
-    const { batchId } = req.body;
-    const token = 'JOIN-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+    const user = (req as any).user;
+    const { batchId, purpose, maxUses, expiresInMinutes } = req.body || {};
+    const isFacultySignup = purpose === 'faculty_signup';
 
     const targetBatchId = batchId || (await getOne('SELECT id FROM batches LIMIT 1'))?.id;
-    if (!targetBatchId) {
+    if (!targetBatchId && !isFacultySignup) {
       res.status(404).json({ error: 'No batch available' });
       return;
     }
 
+    const token = isFacultySignup
+      ? 'FAC-' + crypto.randomBytes(4).toString('hex').toUpperCase()
+      : 'JOIN-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+    const expiresAt = expiresInMinutes
+      ? new Date(Date.now() + Number(expiresInMinutes) * 60 * 1000).toISOString()
+      : null;
+
     await execute(
-      `INSERT INTO join_tokens (id, batch_id, token, is_active) VALUES (?, ?, ?, 1)`,
-      [crypto.randomUUID(), targetBatchId, token]
+      `INSERT INTO join_tokens (id, batch_id, token, token_type, purpose, max_uses, use_count, is_active, expires_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+      [crypto.randomUUID(), targetBatchId || null, token,
+       isFacultySignup ? 'faculty_signup' : 'batch_join', purpose || null,
+       Number(maxUses) || null, expiresAt, user.id]
     );
 
-    res.json({ token });
+    // The client expects { qrPayload, token, expiresAt }
+    res.json({
+      token,
+      qrPayload: token,
+      expiresAt,
+      batchId: targetBatchId,
+    });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
@@ -328,17 +380,73 @@ export async function handleVerifyFacultyCode(req: Request, res: Response) {
 
 export async function handleAdminResetPassword(req: Request, res: Response) {
   try {
-    const { userId, newPassword } = req.body;
-    if (!userId || !newPassword) {
-      res.status(400).json({ error: 'userId and newPassword are required' });
+    const admin = (req as any).user;
+    if (admin.role !== 'admin') {
+      res.status(403).json({ error: 'Only administrators can reset passwords' });
+      return;
+    }
+    const { userId, newPassword, temporaryPassword, requestId } = req.body || {};
+    const finalPassword = temporaryPassword || newPassword;
+    if (!userId || !finalPassword) {
+      res.status(400).json({ error: 'userId and a temporary password are required' });
+      return;
+    }
+    if (String(finalPassword).length < 12) {
+      res.status(400).json({ error: 'Temporary passwords require at least 12 characters' });
       return;
     }
 
     const { hashPassword } = await import('./db.js');
-    const hash = hashPassword(newPassword);
-    await execute('UPDATE profiles SET password_hash = ? WHERE id = ?', [hash, userId]);
+    const hash = hashPassword(String(finalPassword));
+    await execute('UPDATE profiles SET password_hash = ?, must_change_password = 1 WHERE id = ?', [hash, userId]);
 
-    res.json({ success: true });
+    if (requestId) {
+      await execute('UPDATE password_resets SET status = ?, admin_note = ? WHERE id = ?',
+        ['resolved', 'Reset completed from admin dashboard', requestId]);
+      // SQLite queue rows may key the table by email instead of an explicit id.
+      await execute('UPDATE password_resets SET status = ? WHERE user_id = ? AND status = ?',
+        ['resolved', userId, 'pending']);
+    }
+
+    await execute(
+      `INSERT INTO audit_logs (id, actor_id, action, target_table, target_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [crypto.randomUUID(), admin.id, 'admin_password_reset', 'profiles', userId, '{}', new Date().toISOString()]
+    );
+
+    res.json({ success: true, message: 'Temporary password set. The user must replace it after signing in.' });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+}
+
+// ── POST /api/functions/admin-update-attendance — review queue decision
+export async function handleAdminUpdateAttendance(req: Request, res: Response) {
+  try {
+    const admin = (req as any).user;
+    if (admin.role !== 'admin') {
+      res.status(403).json({ error: 'Only administrators can review attendance' });
+      return;
+    }
+    const { attendanceId, status, notes } = req.body || {};
+    if (!attendanceId || !['present', 'rejected'].includes(status)) {
+      res.status(400).json({ error: 'attendanceId and a decision of present or rejected are required' });
+      return;
+    }
+    const record = await getOne('SELECT id, student_id FROM attendance_records WHERE id = ?', [attendanceId]);
+    if (!record) {
+      res.status(404).json({ error: 'Attendance record not found' });
+      return;
+    }
+    await execute(
+      'UPDATE attendance_records SET status = ?, rejection_reason = ?, evidence_review_status = ? WHERE id = ?',
+      [status, notes || null, 'reviewed', attendanceId]
+    );
+    await execute(
+      `INSERT INTO audit_logs (id, actor_id, action, target_table, target_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [crypto.randomUUID(), admin.id, 'attendance_review', 'attendance_records', attendanceId,
+       JSON.stringify({ status, notes }), new Date().toISOString()]
+    );
+    res.json({ success: true, status });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
