@@ -32,7 +32,13 @@ interface LatestRelease {
 let cache: { at: number; data: LatestRelease } | null = null;
 
 function pickApkAsset(assets: any[]): any | null {
-  return (assets || []).find((a) => /\.apk$/i.test(a.name || '')) || null;
+  const list = assets || [];
+  // Prefer the signed release build over the debug APK when both are published.
+  return (
+    list.find((a) => /\.apk$/i.test(a.name || '') && !/debug/i.test(a.name || '')) ||
+    list.find((a) => /\.apk$/i.test(a.name || '')) ||
+    null
+  );
 }
 
 async function fetchFromGitHub(): Promise<LatestRelease | null> {
@@ -47,9 +53,13 @@ async function fetchFromGitHub(): Promise<LatestRelease | null> {
     const data: any = await res.json();
     const apk = pickApkAsset(data.assets || []);
     const tag: string = data.tag_name || data.name || '';
+    const version = (apk?.name?.match(/v?(\d+\.\d+\.\d+)/)?.[1]) || tag.replace(/^v/, '') || tag;
+    // The Android build bumps versionCode in lockstep with the patch number
+    // (1.0.7 → 7, 1.0.8 → 8), so derive the code from the patch segment.
+    const [, , patch] = version.match(/^(\d+)\.(\d+)\.(\d+)$/)?.map(Number) ?? [0, 0, 0];
     return {
-      version: (apk?.name?.match(/v?(\d+\.\d+\.\d+)/)?.[1]) || tag.replace(/^v/, '') || tag,
-      versionCode: Number(/v?(\d+)/.exec(tag)?.[1] || 0),
+      version,
+      versionCode: patch,
       apkUrl: apk?.browser_download_url || FALLBACK_URL,
       releasePage: data.html_url || FALLBACK_URL,
       releaseNotes: data.body || '',
