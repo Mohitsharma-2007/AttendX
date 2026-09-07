@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { Button } from './ui'
 import { useAppStore } from '../store'
-import { getLocalServerUrl } from '../lib/apiClient'
+import { getLocalServerUrl, handleSessionExpired } from '../lib/apiClient'
 
 /**
  * AttendX Mail Center — one page for every institutional mail event:
@@ -106,6 +106,10 @@ export function MailCenter() {
   const fetchCatalog = async (): Promise<boolean> => {
     try {
       const res = await fetch(apiUrl('/api/notices/catalog'), { headers: authHeaders() })
+      if (res.status === 401) {
+        handleSessionExpired()
+        return false
+      }
       if (!res.ok) return false
       const data = await res.json()
       if (!Array.isArray(data.types)) return false

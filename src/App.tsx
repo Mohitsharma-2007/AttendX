@@ -76,7 +76,7 @@ function Signup({ onBack }: { onBack: () => void }) {
       </>
     )}
   <Button onClick={onBack}>Go to sign in</Button></section></main>
-  return <main className="signup-page"><form className="signup-card" onSubmit={submit}><button className="back-link" type="button" onClick={onBack}><ArrowLeft size={16}/>Back to sign in</button><p className="eyebrow">Controlled registration</p><h1>Create your AttendX account</h1><p className="page-description">All identity images must be captured live.</p>{error && <div className="login-error"><AlertTriangle size={16}/>{error}</div>}<div className="signup-role"><button type="button" className={role === 'student' ? 'active' : ''} onClick={() => setRole('student')}><Smartphone size={18}/>Student</button><button type="button" className={role === 'faculty' ? 'active' : ''} onClick={() => setRole('faculty')}><Users size={18}/>Faculty</button></div><div className="signup-fields"><label className="field-label">Full name<input className="text-input" value={form.fullName} onChange={(event) => update('fullName', event.target.value)} required/></label><label className="field-label">Enrollment / employee number<input className="text-input" value={form.identifier} onChange={(event) => update('identifier', event.target.value)} required/></label><label className="field-label">Institution email<input type="email" className="text-input" value={form.email} onChange={(event) => update('email', event.target.value)} required/></label><label className="field-label">Department<input className="text-input" value={form.department} onChange={(event) => update('department', event.target.value)} required/></label><label className="field-label signup-wide">Password<input type="password" minLength={12} className="text-input" value={form.password} onChange={(event) => update('password', event.target.value)} required/><small>At least 12 characters</small></label></div><div className="identity-captures"><CaptureTile title="Your live portrait" icon={<Camera/>} photo={identity} onClick={() => capture('identity')}/><CaptureTile title="ID card front" icon={<IdCard/>} photo={front} onClick={() => capture('front')}/><CaptureTile title="ID card back" icon={<IdCard/>} photo={back} onClick={() => capture('back')}/></div><Button className="full-button" disabled={loading}>{loading && <LoaderCircle className="spin" size={17}/>}{role === 'faculty' ? 'Submit application' : 'Create account'}</Button></form>{cameraField && <CameraCaptureModal facing={cameraField === 'identity' ? 'user' : 'environment'} title={cameraField === 'identity' ? 'Capture your portrait' : `Capture ID card ${cameraField}`} onClose={() => setCameraField(null)} onCapture={(photo) => { setPhoto(cameraField, photo); setCameraField(null) }}/>}</main>
+  return <main className="signup-page"><form className="signup-card" onSubmit={submit}><button className="back-link" type="button" onClick={onBack}><ArrowLeft size={16}/>Back to sign in</button><p className="eyebrow">Controlled registration</p><h1>Create your AttendX account</h1><p className="page-description">All identity images must be captured live.</p>{error && <div className="login-error"><AlertTriangle size={16}/>{error}</div>}<div className="signup-role"><button type="button" className={role === 'student' ? 'active' : ''} onClick={() => setRole('student')}><Smartphone size={18}/>Student</button><button type="button" className={role === 'faculty' ? 'active' : ''} onClick={() => setRole('faculty')}><Users size={18}/>Faculty</button></div><div className="signup-fields"><label className="field-label">Full name<input className="text-input" autoComplete="name" value={form.fullName} onChange={(event) => update('fullName', event.target.value)} required/></label><label className="field-label">Enrollment / employee number<input className="text-input" autoComplete="off" value={form.identifier} onChange={(event) => update('identifier', event.target.value)} required/></label><label className="field-label">Institution email<input type="email" autoComplete="email" className="text-input" value={form.email} onChange={(event) => update('email', event.target.value)} required/></label><label className="field-label">Department<input className="text-input" autoComplete="organization" value={form.department} onChange={(event) => update('department', event.target.value)} required/></label><label className="field-label signup-wide">Password<input type="password" autoComplete="new-password" minLength={12} className="text-input" value={form.password} onChange={(event) => update('password', event.target.value)} required/><small>At least 12 characters</small></label></div><div className="identity-captures"><CaptureTile title="Your live portrait" icon={<Camera/>} photo={identity} onClick={() => capture('identity')}/><CaptureTile title="ID card front" icon={<IdCard/>} photo={front} onClick={() => capture('front')}/><CaptureTile title="ID card back" icon={<IdCard/>} photo={back} onClick={() => capture('back')}/></div><Button className="full-button" disabled={loading}>{loading && <LoaderCircle className="spin" size={17}/>}{role === 'faculty' ? 'Submit application' : 'Create account'}</Button></form>{cameraField && <CameraCaptureModal facing={cameraField === 'identity' ? 'user' : 'environment'} title={cameraField === 'identity' ? 'Capture your portrait' : `Capture ID card ${cameraField}`} onClose={() => setCameraField(null)} onCapture={(photo) => { setPhoto(cameraField, photo); setCameraField(null) }}/>}</main>
 }
 
 function CaptureTile({ title, icon, photo, onClick }: { title: string; icon: React.ReactNode; photo: LivePhoto|null; onClick: () => void }) {
@@ -172,7 +172,6 @@ function Login({ onBack }: { onBack?: () => void }) {
 
   if (signupMode) return <Signup onBack={() => setSignupMode(false)}/>
   return <main className="login-page">
-    {onBack && <button type="button" className="back-link" style={{ alignSelf: 'flex-start' }} onClick={onBack}><ArrowLeft size={16} />Back to home</button>}
     <section className="login-brand">
       <div className="login-brand-inner">
         <Logo />
@@ -215,6 +214,7 @@ function Login({ onBack }: { onBack?: () => void }) {
       </div>
     </section>
     <section className="login-form-side">
+      {onBack && <button type="button" className="back-link" style={{ alignSelf: 'flex-start' }} onClick={onBack}><ArrowLeft size={16} />Back to home</button>}
       <div className="login-mobile-logo" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
         <Logo />
         {!nativeApp && (
@@ -250,9 +250,9 @@ function Login({ onBack }: { onBack?: () => void }) {
         <div className="role-picker" aria-label="Choose account role">
           {(Object.keys(roleCopy) as Role[]).map((item) => <button type="button" key={item} className={role === item ? 'active' : ''} onClick={() => selectRole(item)}><span>{item === 'student' ? <Smartphone size={18}/> : item === 'faculty' ? <Users size={18}/> : <ShieldCheck size={18}/>}</span><strong>{roleCopy[item].label}</strong><small>{roleCopy[item].detail}</small></button>)}
         </div>
-        <label className="field-label">Institution email<input className="text-input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-        {resetMode && <label className="field-label">Enrollment / employee number<input className="text-input" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required /></label>}
-        {!resetMode && <label className="field-label"><span>Password <button type="button" className="text-button" onClick={() => { setResetMode(true); setError('') }}>Forgot password?</button></span><input className="text-input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>}
+        <label className="field-label">Institution email<input className="text-input" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
+        {resetMode && <label className="field-label">Enrollment / employee number<input className="text-input" autoComplete="off" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required /></label>}
+        {!resetMode && <label className="field-label"><span>Password <button type="button" className="text-button" onClick={() => { setResetMode(true); setError('') }}>Forgot password?</button></span><input className="text-input" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>}
         <Button className="full-button" type="submit" disabled={loading}>{loading ? <LoaderCircle className="spin" size={17}/> : resetMode ? <KeyRound size={17}/> : null}{resetMode ? 'Send request to admin' : <>Enter {roleCopy[role].label} workspace <ArrowRight size={17}/></>}</Button>
         {false && <div className="demo-notice"><CheckCircle2 size={16}/><span>Demo mode is active. Start the local server for full functionality.</span></div>}
         </>}
@@ -278,10 +278,10 @@ function Login({ onBack }: { onBack?: () => void }) {
           <p style={{ fontSize: '0.88rem', color: '#94a3b8', margin: '0 0 1.25rem' }}>Identity verified for <strong style={{ color: '#34d399' }}>{email}</strong>. Choose a new password of at least 12 characters.</p>
           {resetError && <div className="login-error" style={{ marginBottom: '1rem' }}><AlertTriangle size={16} />{resetError}</div>}
           <label className="field-label" style={{ color: '#cbd5e1' }}>New password
-            <input className="text-input" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={12} required />
+            <input className="text-input" type="password" autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={12} required />
           </label>
           <label className="field-label" style={{ color: '#cbd5e1' }}>Confirm password
-            <input className="text-input" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} minLength={12} required />
+            <input className="text-input" type="password" autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} minLength={12} required />
           </label>
           <button className="button button-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }} onClick={completeReset} disabled={resetting}>
             {resetting ? 'Updating…' : 'Update password'}
@@ -307,7 +307,7 @@ function PasswordChangeRequired() {
     if (functionError) setError(functionError.message); else setMustChangePassword(false)
     setLoading(false)
   }
-  return <main className="password-change-page"><form className="password-change-card" onSubmit={submit}><span className="success-mark"><KeyRound size={26}/></span><p className="eyebrow">Temporary credentials</p><h1>Choose a private password</h1><p>The administrator-issued password can only be used to enter this screen. Replace it before continuing.</p>{error && <div className="login-error"><AlertTriangle size={16}/>{error}</div>}<label className="field-label">New password<input className="text-input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label><label className="field-label">Confirm password<input className="text-input" type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></label><Button className="full-button" disabled={loading}>{loading && <LoaderCircle className="spin" size={17}/>}Set password and continue</Button><button className="text-button center-button" type="button" onClick={() => signOut()}>Sign out</button></form></main>
+  return <main className="password-change-page"><form className="password-change-card" onSubmit={submit}><span className="success-mark"><KeyRound size={26}/></span><p className="eyebrow">Temporary credentials</p><h1>Choose a private password</h1><p>The administrator-issued password can only be used to enter this screen. Replace it before continuing.</p>{error && <div className="login-error"><AlertTriangle size={16}/>{error}</div>}<label className="field-label">New password<input className="text-input" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label><label className="field-label">Confirm password<input className="text-input" type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></label><Button className="full-button" disabled={loading}>{loading && <LoaderCircle className="spin" size={17}/>}Set password and continue</Button><button className="text-button center-button" type="button" onClick={() => signOut()}>Sign out</button></form></main>
 }
 
 function FacultyPendingApproval() {
@@ -346,7 +346,7 @@ function FacultyCodeEntry() {
         <h1>Enter Invitation Code</h1>
         <p>Your application was approved. Please enter the invitation code sent to your email to activate your account.</p>
         {error && <div className="login-error"><AlertTriangle size={16}/>{error}</div>}
-        <label className="field-label">Invitation code<input className="text-input" value={code} onChange={(e) => setCode(e.target.value)} required /></label>
+        <label className="field-label">Invitation code<input className="text-input" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} required /></label>
         <Button className="full-button" disabled={loading}>{loading && <LoaderCircle className="spin" size={17}/>}Activate Account</Button>
         <button className="text-button center-button" type="button" onClick={() => signOut()}>Sign out</button>
       </form>
@@ -398,6 +398,14 @@ export function App() {
       setCheckingDevMode(false)
     }
   }
+
+  // A 401 anywhere (bell poll, Mail Center, data calls) means the stored
+  // token is stale — return to the login screen instead of spamming 401s.
+  useEffect(() => {
+    const onSessionExpired = () => { void useAppStore.getState().signOut() }
+    window.addEventListener('attendx:session-expired', onSessionExpired)
+    return () => window.removeEventListener('attendx:session-expired', onSessionExpired)
+  }, [])
 
   useEffect(() => {
     void verifyDevMode()

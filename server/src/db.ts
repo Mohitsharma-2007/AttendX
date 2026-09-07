@@ -579,6 +579,15 @@ async function runPostgresSchema() {
       updated_at TIMESTAMPTZ,
       resolved_at TIMESTAMPTZ
     );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      user_id UUID NOT NULL,
+      role TEXT NOT NULL,
+      email TEXT,
+      expires_at BIGINT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `;
   await pgPool.query(ddl);
   await pgPool.query(
@@ -808,6 +817,15 @@ async function runSqliteSchema() {
       created_at TEXT,
       updated_at TEXT,
       resolved_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      email TEXT,
+      expires_at INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `;
   sqliteDb.exec(ddl);

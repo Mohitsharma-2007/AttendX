@@ -232,6 +232,7 @@ class LocalQueryBuilder implements PromiseLike<any> {
       }
 
       // Non-OK response — surface the server error message
+      if (isUnauthorized(res)) handleSessionExpired();
       const errBody = await res.json().catch(() => ({}));
       return { data: null, error: { message: errBody.error || `Request failed (${res.status})` } };
     } catch {
@@ -320,6 +321,23 @@ class LocalQueryBuilder implements PromiseLike<any> {
   ): Promise<TResult1 | TResult2> {
     return this.execute().then(onfulfilled, onrejected);
   }
+}
+
+/**
+ * Called when the server rejects a stored token (401). Clears the local
+ * session and notifies the app so it returns to the login screen instead of
+ * spamming authenticated endpoints forever.
+ */
+export function handleSessionExpired() {
+  if (typeof window === 'undefined') return
+  localStorage.removeItem('attendx_auth_token')
+  localStorage.removeItem('attendx_user')
+  localStorage.removeItem('attendx_profile')
+  window.dispatchEvent(new CustomEvent('attendx:session-expired'))
+}
+
+export function isUnauthorized(res: Response): boolean {
+  return res.status === 401
 }
 
 function createApiClient() {
@@ -415,6 +433,7 @@ function createApiClient() {
           });
           const json = await res.json();
           if (!res.ok) {
+            if (isUnauthorized(res)) handleSessionExpired();
             return { data: null, error: { message: json.error || 'Function invocation failed' } };
           }
           return { data: json, error: null };

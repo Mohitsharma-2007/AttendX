@@ -68,8 +68,8 @@ export const useAppStore = create<AppState>((set) => ({
     try {
       const { data } = await api.auth.getSession()
       if (!data.session?.user) { set({ authenticated: false, authLoading: false }); return }
-      const { data: row } = await api.from('profiles').select('*').eq('id', data.session.user.id).maybeSingle()
-      if (!row?.is_active || !isRole(row.role)) {
+      const { data: row, error: profileError } = await api.from('profiles').select('*').eq('id', data.session.user.id).maybeSingle()
+      if (profileError || !row?.is_active || !isRole(row.role)) {
         await api.auth.signOut()
         set({ role: 'student', profile: emptyProfiles.student, authenticated: false, authLoading: false })
         return

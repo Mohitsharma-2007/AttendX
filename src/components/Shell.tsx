@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import type { Role } from '../types'
 import { useAppStore } from '../store'
 import { Initials, Logo, Button } from './ui'
-import { getLocalServerUrl } from '../lib/apiClient'
+import { getLocalServerUrl, handleSessionExpired } from '../lib/apiClient'
 import { UpdateBanner } from './UpdateBanner'
 
 export type ViewKey = 'home' | 'mark' | 'history' | 'classes' | 'session' | 'people' | 'passwords' | 'review' | 'settings' | 'invites' | 'profile' | 'queries' | 'mail'
@@ -28,7 +28,15 @@ export function Shell({ view, setView, children }: { view: ViewKey; setView: (vi
     const load = () => {
       const token = localStorage.getItem('attendx_auth_token') || ''
       fetch(`${getLocalServerUrl()}/api/notices?status=open`, { headers: { Authorization: `Bearer ${token}` } })
-        .then((res) => (res.ok ? res.json() : Promise.reject(new Error('offline'))))
+        .then((res) => {
+          if (res.status === 401) {
+            // Stale/expired token (e.g. server restarted) — stop polling and
+            // return to sign in instead of spamming 401s.
+            if (alive) handleSessionExpired()
+            return Promise.reject(new Error('session expired'))
+          }
+          return res.ok ? res.json() : Promise.reject(new Error('offline'))
+        })
         .then((rows) => { if (alive && Array.isArray(rows)) setOpenNotices(rows.length) })
         .catch(() => { if (alive) setOpenNotices(0) })
     }

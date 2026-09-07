@@ -38,7 +38,9 @@ export function installConsoleProtection() {
 
   // ── Block devtools shortcuts on web ─────────────────────────────────
   const blockedCombos = (event: KeyboardEvent): boolean => {
-    const key = event.key.toUpperCase();
+    // Some Android WebViews / synthetic events dispatch keydown with an
+    // undefined `key` — guard so we never crash the page on it.
+    const key = (event.key ?? '').toUpperCase();
     if (event.key === 'F12') return true;
     if (event.ctrlKey && event.shiftKey && ['I', 'J', 'C'].includes(key)) return true;
     if (event.metaKey && event.altKey && ['I', 'J', 'C'].includes(key)) return true;

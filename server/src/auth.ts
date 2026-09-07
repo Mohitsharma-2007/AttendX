@@ -11,18 +11,55 @@ if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
-// In-memory token store for active sessions
+// In-memory token store for active sessions — a fast path only. Sessions are
+// also persisted to the database so tokens survive process restarts and
+// serverless cold starts (Vercel functions start fresh on every invocation).
 const activeSessions = new Map<string, { userId: string; role: string; email: string; expiresAt: number }>();
 
-export function generateToken(user: { id: string; role: string; email: string }): string {
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+export async function generateToken(user: { id: string; role: string; email: string }): Promise<string> {
   const token = 'atx_' + crypto.randomBytes(32).toString('hex');
-  activeSessions.set(token, {
+  const info = {
     userId: user.id,
     role: user.role,
     email: user.email,
-    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
-  });
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  };
+  activeSessions.set(token, info);
+  try {
+    await execute(
+      'INSERT INTO sessions (token, user_id, role, email, expires_at) VALUES (?, ?, ?, ?, ?)',
+      [token, info.userId, info.role, info.email, info.expiresAt],
+    );
+  } catch (err) {
+    console.warn('Could not persist session token:', (err as Error).message);
+  }
   return token;
+}
+
+/**
+ * Resolve a session token from the in-memory cache first, then the database
+ * (so tokens issued before a restart still authenticate). Expired rows are
+ * dropped lazily.
+ */
+async function lookupSession(token: string): Promise<{ userId: string; role: string; email: string; expiresAt: number } | null> {
+  const cached = activeSessions.get(token);
+  if (cached) return cached.expiresAt > Date.now() ? cached : null;
+  try {
+    const row = await getOne<any>('SELECT * FROM sessions WHERE token = ?', [token]);
+    if (!row) return null;
+    const expiresAt = Number(row.expires_at);
+    if (!expiresAt || expiresAt < Date.now()) {
+      await execute('DELETE FROM sessions WHERE token = ?', [token]);
+      return null;
+    }
+    const info = { userId: row.user_id, role: row.role, email: row.email, expiresAt };
+    activeSessions.set(token, info);
+    return info;
+  } catch {
+    return null;
+  }
 }
 
 export async function authenticate(req: Request, res: Response, next: NextFunction) {
@@ -32,8 +69,8 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     return;
   }
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  const session = activeSessions.get(token);
-  if (!session || session.expiresAt < Date.now()) {
+  const session = await lookupSession(token);
+  if (!session) {
     res.status(401).json({ error: 'Invalid or expired session token' });
     return;
   }
@@ -57,8 +94,8 @@ export async function authenticateOptional(req: Request, _res: Response, next: N
   const authHeader = req.headers.authorization;
   if (authHeader) {
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    const session = activeSessions.get(token);
-    if (session && session.expiresAt > Date.now()) {
+    const session = await lookupSession(token);
+    if (session) {
       const user = await getOne('SELECT * FROM profiles WHERE id = ? AND is_active = 1', [session.userId]);
       if (user) (req as any).user = user;
     }
@@ -111,7 +148,7 @@ export async function handleLogin(req: Request, res: Response) {
     return;
   }
 
-  const token = generateToken(user);
+  const token = await generateToken(user);
   res.json({
     access_token: token,
     token_type: 'bearer',
