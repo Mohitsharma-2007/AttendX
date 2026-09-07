@@ -1,11 +1,10 @@
-import { Capacitor } from '@capacitor/core'
 import type { LucideIcon } from 'lucide-react'
-import { Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, ClipboardCheck, Grid2X2, History, Inbox, KeyRound, LifeBuoy, LogOut, Menu, QrCode, Server, Settings, ShieldCheck, Smartphone, Users, X, Database } from 'lucide-react'
+import { Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, ClipboardCheck, Grid2X2, History, Inbox, KeyRound, LifeBuoy, LogOut, Menu, QrCode, Settings, ShieldCheck, Smartphone, Users, X } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import type { Role } from '../types'
 import { useAppStore } from '../store'
 import { Initials, Logo, Button } from './ui'
-import { getLocalServerUrl, setLocalServerUrl } from '../lib/apiClient'
+import { getLocalServerUrl } from '../lib/apiClient'
 import { UpdateBanner } from './UpdateBanner'
 
 export type ViewKey = 'home' | 'mark' | 'history' | 'classes' | 'session' | 'people' | 'passwords' | 'review' | 'settings' | 'invites' | 'profile' | 'queries' | 'mail'
@@ -19,8 +18,6 @@ const navByRole: Record<Role, Nav[]> = {
 export function Shell({ view, setView, children }: { view: ViewKey; setView: (view: ViewKey) => void; children: ReactNode }) {
   const { role, profile, signOut } = useAppStore()
   const [menuOpen, setMenuOpen] = useState(false)
-  const [serverModalOpen, setServerModalOpen] = useState(false)
-  const [serverInput, setServerInput] = useState(getLocalServerUrl())
   const [openNotices, setOpenNotices] = useState(0)
   const nav = navByRole[role]
   const select = (key: ViewKey) => { setView(key); setMenuOpen(false) }
@@ -40,14 +37,6 @@ export function Shell({ view, setView, children }: { view: ViewKey; setView: (vi
     return () => { alive = false; window.clearInterval(timer) }
   }, [])
 
-  const saveServer = () => {
-    setLocalServerUrl(serverInput)
-    setServerModalOpen(false)
-    window.location.reload()
-  }
-
-  const isNative = Capacitor.isNativePlatform()
-
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`}>
       <div className="sidebar-head"><Logo /><button className="icon-button sidebar-close" onClick={() => setMenuOpen(false)} aria-label="Close navigation"><X /></button></div>
@@ -66,15 +55,6 @@ export function Shell({ view, setView, children }: { view: ViewKey; setView: (vi
         <button className="icon-button menu-button" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu /></button>
         <div className="topbar-brand"><Logo compact /></div>
         <span className="role-chip">{role}</span>
-        <button
-          className="role-chip"
-          style={{ cursor: 'pointer', background: 'rgba(16, 185, 129, 0.12)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-          onClick={() => setServerModalOpen(true)}
-          title="Configure Server URL"
-        >
-          <Database size={14} />
-          <span>MongoDB/Local</span>
-        </button>
         <div className="topbar-actions">
           <button
             className="icon-button notification-button"
@@ -96,36 +76,5 @@ export function Shell({ view, setView, children }: { view: ViewKey; setView: (vi
       nav.find((item) => item.key === 'queries') || nav[2],
       nav.find((item) => item.key === 'mail'),
     ].filter((item): item is Nav => Boolean(item)).map(({ key, label, icon: Icon }) => <button key={key} className={view === key ? 'active' : ''} onClick={() => select(key)}><Icon size={20}/><span>{label.replace(' attendance', '')}</span></button>)}<button className={view === 'profile' ? 'active' : ''} onClick={() => select('profile')}><CircleUserRound size={20}/><span>Profile</span></button></nav>
-
-    {serverModalOpen && (
-      <div className="modal-backdrop" onClick={() => setServerModalOpen(false)}>
-        <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px', padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Server size={18} /> Backend Server Connection
-            </h3>
-            <button className="icon-button" onClick={() => setServerModalOpen(false)}><X size={18}/></button>
-          </div>
-          <p style={{ fontSize: '0.88rem', color: 'var(--text-muted, #94a3b8)', marginBottom: '1rem' }}>
-            {isNative
-              ? 'Enter your laptop\'s IP address (e.g. http://192.168.1.50:3001) so the app can communicate with your local database.'
-              : 'When running AttendX on your phone or on Vercel, enter your laptop\'s IP address (e.g. http://192.168.1.50:3001) so the app can communicate with your local database.'
-            }
-          </p>
-          <input
-            type="text"
-            className="text-input"
-            value={serverInput}
-            onChange={(e) => setServerInput(e.target.value)}
-            placeholder="http://localhost:3001"
-            style={{ width: '100%', marginBottom: '1rem' }}
-          />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-            <Button variant="secondary" onClick={() => setServerModalOpen(false)}>Cancel</Button>
-            <Button onClick={saveServer}>Save & Connect</Button>
-          </div>
-        </div>
-      </div>
-    )}
   </div>
 }

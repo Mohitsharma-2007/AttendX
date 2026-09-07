@@ -26,6 +26,7 @@ import {
   RefreshCw,
   ScanLine,
   Search,
+  Server,
   Settings,
   ShieldAlert,
   Smartphone,
@@ -46,7 +47,7 @@ import { BarcodeScanner } from "@capacitor-mlkit/barcode-scanning";
 import type { Role } from "./types";
 import { useAppStore } from "./store";
 import { supabase } from "./lib/apiClient";
-import { getLocalServerUrl } from "./lib/apiClient";
+import { getLocalServerUrl, setLocalServerUrl } from "./lib/apiClient";
 import { checkDeviceIntegrity } from "./lib/deviceIntegrity";
 import { Button, Initials, StatusPill } from "./components/ui";
 import {
@@ -2197,6 +2198,52 @@ export function FacultySession() {
   );
 }
 
+function AdminMailCenterSummary({ go }: { go: (key: any) => void }) {
+  const [notices, setNotices] = useState<any[]>([]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("attendx_auth_token") || "";
+    fetch(`${getLocalServerUrl()}/api/notices?status=open`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("offline"))))
+      .then((rows) => setNotices(Array.isArray(rows) ? rows.slice(0, 4) : []))
+      .catch(() => setNotices([]));
+  }, []);
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <p className="eyebrow">Mail Center</p>
+          <h2>Open requests</h2>
+        </div>
+        <button className="text-button" onClick={() => go("mail")}>
+          Open Mail Center <ArrowRight size={15} />
+        </button>
+      </div>
+      {notices.length ? (
+        notices.map((item) => (
+          <div className="review-row" key={item.id}>
+            <span className="review-icon review-amber">
+              <Inbox size={17} />
+            </span>
+            <span>
+              <strong>{item.subject || item.type}</strong>
+              <small>
+                {item.tracking_id} · {item.sender_name || item.sender_email || "system"}
+              </small>
+            </span>
+            <ChevronRight size={15} />
+          </div>
+        ))
+      ) : (
+        <SmallEmpty label="No open requests — all mail handled" />
+      )}
+    </section>
+  );
+}
+
 function AdminFacultyApprovals() {
   const result = useLoad([] as any[], () =>
     fetch(`${getLocalServerUrl()}/api/faculty/pending`, {
@@ -2435,6 +2482,7 @@ export function AdminDashboard({ go }: { go: (key: any) => void }) {
               )}
             </section>
             <AdminFacultyApprovals />
+            <AdminMailCenterSummary go={go} />
           </div>
           <section className="panel recent-panel">
             <div className="panel-head">
@@ -2953,6 +3001,70 @@ export function SettingsView() {
   );
 }
 
+function ServerConnectionCard() {
+  const [url, setUrl] = useState(getLocalServerUrl());
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const test = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const res = await fetch(`${url.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const json = await res.json();
+        setLocalServerUrl(url);
+        setResult({ ok: true, text: `Connected — database ${(json.database || "active").toUpperCase()}.` });
+      } else {
+        setResult({ ok: false, text: `Server responded with status ${res.status}.` });
+      }
+    } catch {
+      setResult({ ok: false, text: "Could not reach the server. Check the URL and your network." });
+    }
+    setTesting(false);
+  };
+
+  return (
+    <div className="form-body" style={{ padding: "1.5rem" }}>
+      <p style={{ color: "var(--muted)", fontSize: "0.88rem", marginBottom: "1rem" }}>
+        The AttendX app talks to your AttendX server for all data and mail.
+        On this device it is currently using:
+      </p>
+      <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          className="text-input"
+          style={{ flex: 1, minWidth: "240px" }}
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://attendx-lilac-zeta.vercel.app or http://192.168.1.50:3001"
+        />
+        <Button onClick={test} disabled={testing}>
+          <RefreshCw size={16} className={testing ? "spin" : ""} />
+          {testing ? "Testing…" : "Test & save"}
+        </Button>
+      </div>
+      {result && (
+        <div
+          style={{
+            marginTop: "0.85rem",
+            padding: "0.6rem 0.9rem",
+            borderRadius: 6,
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            fontSize: "0.88rem",
+            background: result.ok ? "rgba(22,125,100,.12)" : "rgba(188,75,87,.12)",
+            color: result.ok ? "var(--green)" : "var(--rose)",
+          }}
+        >
+          {result.ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+          {result.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ProfileView() {
   const { profile, role } = useAppStore();
   const [password, setPassword] = useState("");
@@ -3115,6 +3227,13 @@ export function ProfileView() {
               </div>
             )}
           </div>
+        </section>
+        <section className="panel password-card">
+          <div className="panel-head">
+            <h2>Server connection</h2>
+            <Server size={20} />
+          </div>
+          <ServerConnectionCard />
         </section>
         <section className="panel password-card">
           <div className="panel-head">

@@ -204,7 +204,7 @@ export function MailCenter() {
             <div className="data-state" style={{ minHeight: '120px' }}>
               <AlertCircle size={22} />
               <strong>Mail Center is offline</strong>
-              <span>Connect to the AttendX server (tap the database chip in the top bar) to load the mail categories.</span>
+              <span>Connect to the AttendX server (Profile → Server connection) to load the mail categories.</span>
               <Button variant="secondary" onClick={() => void loadCatalog()}><RefreshCw size={15} /> Retry</Button>
             </div>
           )}
