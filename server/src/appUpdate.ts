@@ -56,7 +56,8 @@ async function fetchFromGitHub(): Promise<LatestRelease | null> {
     const version = (apk?.name?.match(/v?(\d+\.\d+\.\d+)/)?.[1]) || tag.replace(/^v/, '') || tag;
     // The Android build bumps versionCode in lockstep with the patch number
     // (1.0.7 → 7, 1.0.8 → 8), so derive the code from the patch segment.
-    const [, , patch] = version.match(/^(\d+)\.(\d+)\.(\d+)$/)?.map(Number) ?? [0, 0, 0];
+    const versionMatch = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
+    const patch = versionMatch ? Number(versionMatch[3]) : 0;
     return {
       version,
       versionCode: patch,
