@@ -7,8 +7,9 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(here, '../../.env') });
-dotenv.config(); // plus any local overrides
+// override: true so a stale empty shell variable can't shadow the real .env value
+dotenv.config({ path: path.resolve(here, '../../.env'), override: true });
+dotenv.config({ override: true }); // plus any local overrides
 
 import { initDb, getDbKind } from './db.js';
 import { handleLogin, handleSignup, authenticate, authenticateOptional } from './auth.js';

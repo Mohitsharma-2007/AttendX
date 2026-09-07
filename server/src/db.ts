@@ -846,7 +846,7 @@ async function seedDefaults() {
   const facultyEmail = 'faculty@attendx.edu';
   const studentEmail = 'student@attendx.edu';
 
-  let admin = await getOne('SELECT id FROM profiles WHERE email = ?', [adminEmail]);
+  let admin = await getOne('SELECT * FROM profiles WHERE email = ?', [adminEmail]);
   if (!admin) {
     const adminId = crypto.randomUUID();
     const passwordHash = hashPassword('Admin@123456');
@@ -859,7 +859,7 @@ async function seedDefaults() {
     admin = { id: adminId };
   }
 
-  let faculty = await getOne('SELECT id FROM profiles WHERE email = ?', [facultyEmail]);
+  let faculty = await getOne('SELECT * FROM profiles WHERE email = ?', [facultyEmail]);
   if (!faculty) {
     const facultyId = crypto.randomUUID();
     const passwordHash = hashPassword('Faculty@123456');
@@ -872,7 +872,7 @@ async function seedDefaults() {
     faculty = { id: facultyId };
   }
 
-  let student = await getOne('SELECT id FROM profiles WHERE email = ?', [studentEmail]);
+  let student = await getOne('SELECT * FROM profiles WHERE email = ?', [studentEmail]);
   if (!student) {
     const studentId = crypto.randomUUID();
     const passwordHash = hashPassword('Student@123456');
@@ -886,7 +886,7 @@ async function seedDefaults() {
   }
 
   // Seed sample batch and class if empty
-  const batches = await query('SELECT id FROM batches LIMIT 1');
+  const batches = await query('SELECT * FROM batches LIMIT 1');
   if (batches.length === 0) {
     const batchId = crypto.randomUUID();
     await execute(
@@ -920,7 +920,7 @@ async function seedDefaults() {
     // Self-repair older seeded databases that are missing the faculty/student
     // links (the class previously shipped without faculty_id assigned).
     const batch = batches[0] as any;
-    const linkedClass = await getOne('SELECT id FROM classes WHERE batch_id = ? LIMIT 1', [batch.id]);
+    const linkedClass = await getOne('SELECT * FROM classes WHERE batch_id = ? LIMIT 1', [batch.id]);
     if (linkedClass) {
       await execute('UPDATE classes SET faculty_id = ? WHERE id = ? AND faculty_id IS NULL', [faculty.id, linkedClass.id]);
     }
