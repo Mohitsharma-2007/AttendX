@@ -2,8 +2,8 @@
  * Bundled app identity. Bump these together with android/app/build.gradle
  * (versionName / versionCode) on every release.
  */
-export const APP_VERSION = '1.0.3';
-export const APP_VERSION_CODE = 3;
+export const APP_VERSION = '1.0.4';
+export const APP_VERSION_CODE = 4;
 
 export interface AppUpdateInfo {
   currentVersion: string;
