@@ -1,7 +1,4 @@
-<?xml version='1.0' encoding='utf-8'?>
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AttendX</string>
-    <string name="title_activity_main">AttendX</string>
-    <string name="package_name">in.attendx.app</string>
-    <string name="custom_url_scheme">in.attendx.app</string>
 </resources>

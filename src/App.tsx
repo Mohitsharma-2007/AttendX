@@ -408,6 +408,11 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    // Native app: never park on the web landing page.
+    if (isNativeApp()) setLandingOpen(false)
+  }, [])
+
+  useEffect(() => {
     void verifyDevMode()
     void bootstrap()
 
@@ -494,7 +499,10 @@ export function App() {
   }
 
   if (authLoading) return <div className="app-loading"><Logo/><LoaderCircle className="spin"/></div>
-  if (!authenticated) return landingOpen
+  // The landing page is web marketing — inside the APK it goes straight to
+  // sign-in. (Capacitor's bridge can arrive after first paint, so re-check.)
+  const showLanding = !isNativeApp() && landingOpen
+  if (!authenticated) return showLanding
     ? <Landing onLaunch={() => setLandingOpen(false)} />
     : <Login onBack={() => setLandingOpen(true)} />
   if (profile.must_change_password) return <PasswordChangeRequired />

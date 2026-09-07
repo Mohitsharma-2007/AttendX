@@ -2,6 +2,7 @@
 .ld-root {
   position: relative;
   min-height: 100vh;
+  min-height: 100dvh;
   background: #0b1311;
   color: #e8efec;
   font-family: 'DM Sans', system-ui, sans-serif;

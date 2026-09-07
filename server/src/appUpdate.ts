@@ -54,13 +54,15 @@ async function fetchFromGitHub(): Promise<LatestRelease | null> {
     const apk = pickApkAsset(data.assets || []);
     const tag: string = data.tag_name || data.name || '';
     const version = (apk?.name?.match(/v?(\d+\.\d+\.\d+)/)?.[1]) || tag.replace(/^v/, '') || tag;
-    // The Android build bumps versionCode in lockstep with the patch number
-    // (1.0.7 → 7, 1.0.8 → 8), so derive the code from the patch segment.
+    // Android versionCode scheme: major*10000 + minor*100 + patch
+    // (1.0.8 → 10008, 2.0.0 → 20000) — matches build.gradle/appVersion.ts.
     const versionMatch = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
-    const patch = versionMatch ? Number(versionMatch[3]) : 0;
+    const versionCode = versionMatch
+      ? Number(versionMatch[1]) * 10000 + Number(versionMatch[2]) * 100 + Number(versionMatch[3])
+      : 0;
     return {
       version,
-      versionCode: patch,
+      versionCode,
       apkUrl: apk?.browser_download_url || FALLBACK_URL,
       releasePage: data.html_url || FALLBACK_URL,
       releaseNotes: data.body || '',
