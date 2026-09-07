@@ -15,6 +15,7 @@ import {
   Filter,
   Flag,
   Globe2,
+  Inbox,
   KeyRound,
   LoaderCircle,
   LocateFixed,
@@ -392,6 +393,10 @@ export function StudentDashboard({ go }: { go: (key: any) => void }) {
             <Button variant="secondary" onClick={() => go("classes")}>
               <UsersRound size={17} />
               Join batch
+            </Button>
+            <Button variant="secondary" onClick={() => go("mail")}>
+              <Inbox size={17} />
+              Mail Center
             </Button>
             <Button onClick={() => go("mark")}>
               <QrCode size={18} />
@@ -1774,6 +1779,10 @@ export function FacultyDashboard({ go }: { go: (key: any) => void }) {
               <Plus size={17} />
               Create class
             </Button>
+            <Button variant="secondary" onClick={() => go("mail")}>
+              <Inbox size={17} />
+              Mail Center
+            </Button>
             <Button onClick={() => go("session")}>
               <QrCode size={18} />
               Start session
@@ -2329,6 +2338,10 @@ export function AdminDashboard({ go }: { go: (key: any) => void }) {
             <Button onClick={() => go("people")}>
               <UsersRound size={17} />
               Manage people
+            </Button>
+            <Button variant="secondary" onClick={() => go("mail")}>
+              <Inbox size={17} />
+              Mail Center
             </Button>
             <Button variant="secondary" onClick={() => go("invites")}>
               <KeyRound size={17} />

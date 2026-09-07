@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core'
 import type { LucideIcon } from 'lucide-react'
 import { Bell, BookOpen, CalendarDays, ChevronDown, CircleUserRound, ClipboardCheck, Grid2X2, History, Inbox, KeyRound, LifeBuoy, LogOut, Menu, QrCode, Server, Settings, ShieldCheck, Smartphone, Users, X, Database } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { Role } from '../types'
 import { useAppStore } from '../store'
 import { Initials, Logo, Button } from './ui'
@@ -21,8 +21,24 @@ export function Shell({ view, setView, children }: { view: ViewKey; setView: (vi
   const [menuOpen, setMenuOpen] = useState(false)
   const [serverModalOpen, setServerModalOpen] = useState(false)
   const [serverInput, setServerInput] = useState(getLocalServerUrl())
+  const [openNotices, setOpenNotices] = useState(0)
   const nav = navByRole[role]
   const select = (key: ViewKey) => { setView(key); setMenuOpen(false) }
+
+  // Live open-request badge for the bell — role-aware from the Mail Center.
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      const token = localStorage.getItem('attendx_auth_token') || ''
+      fetch(`${getLocalServerUrl()}/api/notices?status=open`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error('offline'))))
+        .then((rows) => { if (alive && Array.isArray(rows)) setOpenNotices(rows.length) })
+        .catch(() => { if (alive) setOpenNotices(0) })
+    }
+    load()
+    const timer = window.setInterval(load, 60000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [])
 
   const saveServer = () => {
     setLocalServerUrl(serverInput)
@@ -60,13 +76,26 @@ export function Shell({ view, setView, children }: { view: ViewKey; setView: (vi
           <span>MongoDB/Local</span>
         </button>
         <div className="topbar-actions">
-          <button className="icon-button notification-button" aria-label="Notifications"><Bell size={20}/><i /></button>
+          <button
+            className="icon-button notification-button"
+            aria-label={`Notifications — ${openNotices} open in Mail Center`}
+            title={`Mail Center · ${openNotices} open request${openNotices === 1 ? '' : 's'}`}
+            onClick={() => select('mail')}
+          >
+            <Bell size={20}/>
+            {openNotices > 0 && <i />}
+          </button>
           <button className="compact-profile" onClick={() => select('profile')}><Initials name={profile.full_name} size="sm"/><span>{profile.full_name.split(' ')[0]}</span></button>
         </div>
       </header>
       <div className="content"><UpdateBanner />{children}</div>
     </main>
-    <nav className="mobile-nav">{nav.slice(0, 4).map(({ key, label, icon: Icon }) => <button key={key} className={view === key ? 'active' : ''} onClick={() => select(key)}><Icon size={20}/><span>{label.replace(' attendance', '')}</span></button>)}<button className={view === 'profile' ? 'active' : ''} onClick={() => select('profile')}><CircleUserRound size={20}/><span>Profile</span></button></nav>
+    <nav className="mobile-nav">{[
+      nav.find((item) => item.key === 'home'),
+      nav.find((item) => ['mark', 'session', 'people'].includes(item.key)) || nav[1],
+      nav.find((item) => item.key === 'queries') || nav[2],
+      nav.find((item) => item.key === 'mail'),
+    ].filter((item): item is Nav => Boolean(item)).map(({ key, label, icon: Icon }) => <button key={key} className={view === key ? 'active' : ''} onClick={() => select(key)}><Icon size={20}/><span>{label.replace(' attendance', '')}</span></button>)}<button className={view === 'profile' ? 'active' : ''} onClick={() => select('profile')}><CircleUserRound size={20}/><span>Profile</span></button></nav>
 
     {serverModalOpen && (
       <div className="modal-backdrop" onClick={() => setServerModalOpen(false)}>

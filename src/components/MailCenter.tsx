@@ -200,6 +200,15 @@ export function MailCenter() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '.6rem' }}><Mail size={20} /><h2>{isAdmin ? 'New mail / notice' : 'New request'}</h2></div>
           </div>
 
+          {types.length === 0 && (
+            <div className="data-state" style={{ minHeight: '120px' }}>
+              <AlertCircle size={22} />
+              <strong>Mail Center is offline</strong>
+              <span>Connect to the AttendX server (tap the database chip in the top bar) to load the mail categories.</span>
+              <Button variant="secondary" onClick={() => void loadCatalog()}><RefreshCw size={15} /> Retry</Button>
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '.6rem', marginBottom: '1.1rem' }}>
             {types.map((t) => {
               const Icon = ICONS[t.icon] || Mail
