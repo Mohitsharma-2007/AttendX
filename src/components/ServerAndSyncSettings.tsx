@@ -154,26 +154,42 @@ export function ServerAndSyncSettings() {
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
-    try {
-      const res = await fetch(`${serverUrl.replace(/\/$/, '')}/health`, { signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
-        const json = await res.json();
-        setTestResult({
-          ok: true,
-          message: `Connected! Database: ${(json.database || 'active').toUpperCase()}`,
-        });
-        setLocalServerUrl(serverUrl);
-      } else {
-        setTestResult({ ok: false, message: `Server responded with status ${res.status}` });
+    const base = serverUrl.replace(/\/$/, '');
+    // /api/health exists on both the Vercel serverless function and the
+    // standalone server; /health only exists standalone. The first request
+    // can absorb a serverless cold start, so allow 15s and retry once.
+    const tryHealth = async (path: string) => {
+      const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15000) });
+      return res.ok ? ((await res.json()) as { database?: string }) : null;
+    };
+    let json: { database?: string } | null = null;
+    for (let attempt = 0; attempt < 2 && !json; attempt++) {
+      try {
+        json = await tryHealth('/api/health');
+      } catch {
+        /* cold start or network blip — retry */
       }
-    } catch (err) {
+    }
+    if (!json) {
+      try {
+        json = await tryHealth('/health');
+      } catch {
+        /* reported below */
+      }
+    }
+    if (json) {
+      setTestResult({
+        ok: true,
+        message: `Connected! Database: ${(json.database || 'active').toUpperCase()}`,
+      });
+      setLocalServerUrl(serverUrl);
+    } else {
       setTestResult({
         ok: false,
-        message: `Connection failed: ${(err as Error).message}. Ensure the AttendX server is running.`,
+        message: 'Could not reach the server. Check the URL and your network — the first request after idle can take up to 15s.',
       });
-    } finally {
-      setTesting(false);
     }
+    setTesting(false);
   };
 
   const handleExportBackup = async () => {

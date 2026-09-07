@@ -3091,17 +3091,37 @@ function ServerConnectionCard() {
   const test = async () => {
     setTesting(true);
     setResult(null);
-    try {
-      const res = await fetch(`${url.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(5000) });
-      if (res.ok) {
-        const json = await res.json();
-        setLocalServerUrl(url);
-        setResult({ ok: true, text: `Connected — database ${(json.database || "active").toUpperCase()}.` });
-      } else {
-        setResult({ ok: false, text: `Server responded with status ${res.status}.` });
+    const base = url.replace(/\/$/, "");
+    // /api/health exists on both the Vercel serverless function and the
+    // standalone server; /health only exists standalone. The first request
+    // can absorb a serverless cold start, so allow 15s and retry once.
+    const tryHealth = async (path: string) => {
+      const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15000) });
+      return res.ok ? ((await res.json()) as { database?: string }) : null;
+    };
+    let json: { database?: string } | null = null;
+    for (let attempt = 0; attempt < 2 && !json; attempt++) {
+      try {
+        json = await tryHealth("/api/health");
+      } catch {
+        /* cold start or network blip — retry */
       }
-    } catch {
-      setResult({ ok: false, text: "Could not reach the server. Check the URL and your network." });
+    }
+    if (!json) {
+      try {
+        json = await tryHealth("/health");
+      } catch {
+        /* reported below */
+      }
+    }
+    if (json) {
+      setLocalServerUrl(url);
+      setResult({ ok: true, text: `Connected — database ${(json.database || "active").toUpperCase()}.` });
+    } else {
+      setResult({
+        ok: false,
+        text: "Could not reach the server. Check the URL and your network — the first request after idle can take up to 15s.",
+      });
     }
     setTesting(false);
   };
