@@ -63,6 +63,7 @@ function MassMailPanel() {
           <h2>Mass Mail — Notice to Users</h2>
         </div>
       </div>
+      <div className="panel-body">
       <p style={{ color: 'var(--muted)', marginBottom: '1rem', fontSize: '0.9rem' }}>
         Send an official email notice to every active user. Include the latest
         Android APK link so everyone can update the app straight from the mail.
@@ -135,6 +136,7 @@ function MassMailPanel() {
           {result.text}
         </div>
       )}
+      </div>
     </section>
   );
 }
@@ -200,6 +202,7 @@ export function ServerAndSyncSettings() {
             <h2>Server & Database Connection</h2>
           </div>
         </div>
+        <div className="panel-body">
         <p style={{ color: 'var(--muted)', marginBottom: '1rem', fontSize: '0.9rem' }}>
           Connect this web application or mobile device to the AttendX server.
           Data is stored in MongoDB Atlas with an embedded fallback for offline use.
@@ -236,6 +239,7 @@ export function ServerAndSyncSettings() {
             {testResult.message}
           </div>
         )}
+        </div>
       </section>
 
       {/* Data & backup */}
@@ -246,13 +250,15 @@ export function ServerAndSyncSettings() {
             <h2>Data & Backup</h2>
           </div>
         </div>
-        <p style={{ color: 'var(--muted)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-          Export a full JSON snapshot of the database — profiles, classes, attendance records, and queries.
-        </p>
-        <Button variant="secondary" onClick={handleExportBackup} disabled={exporting}>
-          <Download size={16} />
-          {exporting ? 'Preparing…' : 'Export Database Backup (JSON)'}
-        </Button>
+        <div className="panel-body">
+          <p style={{ color: 'var(--muted)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            Export a full JSON snapshot of the database — profiles, classes, attendance records, and queries.
+          </p>
+          <Button variant="secondary" onClick={handleExportBackup} disabled={exporting}>
+            <Download size={16} />
+            {exporting ? 'Preparing…' : 'Export Database Backup (JSON)'}
+          </Button>
+        </div>
       </section>
 
       {/* Admin mass-mail */}
@@ -266,11 +272,13 @@ export function ServerAndSyncSettings() {
             <h2>Security</h2>
           </div>
         </div>
-        <p style={{ color: 'var(--muted)', marginBottom: '0', fontSize: '0.9rem' }}>
-          Password resets are verified by one-time codes sent through Gmail SMTP.
-          Faculty accounts are activated with emailed invitation codes. Attendance
-          queries are tracked with unique request numbers and resolved by email.
-        </p>
+        <div className="panel-body">
+          <p style={{ color: 'var(--muted)', marginBottom: '0', fontSize: '0.9rem' }}>
+            Password resets are verified by one-time codes sent through Gmail SMTP.
+            Faculty accounts are activated with emailed invitation codes. Attendance
+            queries are tracked with unique request numbers and resolved by email.
+          </p>
+        </div>
       </section>
     </div>
   );

@@ -111,7 +111,8 @@ async function initMongoIndexes() {
 
 /**
  * Translate simple SQL SELECT into MongoDB find.
- * Supports: SELECT * FROM <col> WHERE <field>=? AND ... ORDER BY <f> ASC|DESC LIMIT N
+ * Supports: SELECT <cols|*> FROM <col> WHERE <field>=? AND ... ORDER BY <f> ASC|DESC LIMIT N
+ * Also handles lower(field) = ? / lower(field) = lower(?) and field IN (a,b,c).
  */
 function parseSqlForMongo(sql: string, params: any[]): {
   collection: string;
@@ -128,14 +129,15 @@ function parseSqlForMongo(sql: string, params: any[]): {
 
   // SELECT
   const selectMatch = trimmed.match(
-    /^SELECT\s+\*\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(\w+)\s+(ASC|DESC))?(?:\s+LIMIT\s+(\d+))?$/i
+    /^SELECT\s+([\w\s,*]+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(\w+)\s+(ASC|DESC))?(?:\s+LIMIT\s+(\d+))?$/i
   );
   if (selectMatch) {
-    const collection = selectMatch[1];
-    const whereClause = selectMatch[2] || '';
-    const orderCol = selectMatch[3];
-    const orderDir = selectMatch[4];
-    const limitVal = selectMatch[5];
+    const columnList = selectMatch[1].trim();
+    const collection = selectMatch[2];
+    const whereClause = selectMatch[3] || '';
+    const orderCol = selectMatch[4];
+    const orderDir = selectMatch[5];
+    const limitVal = selectMatch[6];
 
     const filter: Record<string, any> = {};
     if (whereClause) {
@@ -150,8 +152,16 @@ function parseSqlForMongo(sql: string, params: any[]): {
         const ltMatch = cond.match(/(\w+)\s*<\s*\?/);
         const lteMatch = cond.match(/(\w+)\s*<=\s*\?/);
         const lowerEqMatch = cond.match(/lower\((\w+)\)\s*=\s*lower\(\?\)/i);
+        const lowerEqSingle = cond.match(/lower\((\w+)\)\s*=\s*\?/i);
+        const inMatch = cond.match(/(\w+)\s+IN\s+\(([^)]*)\)/i);
 
-        if (lowerEqMatch) {
+        if (inMatch) {
+          const values = inMatch[2].split(',').map((v) => v.trim().replace(/^['"]|['"]$/g, '')).map((v) => v === '?' ? params[pIdx++] : (isNaN(Number(v)) ? v : Number(v)));
+          filter[inMatch[1]] = { $in: values };
+        } else if (lowerEqSingle) {
+          const val = params[pIdx++];
+          filter[lowerEqSingle[1]] = { $regex: new RegExp(`^${String(val).replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}$`, 'i') };
+        } else if (lowerEqMatch) {
           const val = params[pIdx++];
           filter[lowerEqMatch[1]] = { $regex: new RegExp(`^${String(val).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
         } else if (neqMatch) {
@@ -171,6 +181,12 @@ function parseSqlForMongo(sql: string, params: any[]): {
     }
 
     const result: any = { collection, filter };
+    // Column-list projection (SELECT id, name FROM …)
+    if (!columnList.includes('*')) {
+      const projection: Record<string, 1> = {};
+      for (const c of columnList.split(',').map((s) => s.trim()).filter(Boolean)) projection[c] = 1;
+      result.projection = projection;
+    }
     if (orderCol) result.sort = { [orderCol]: orderDir?.toUpperCase() === 'DESC' ? -1 : 1 };
     if (limitVal) result.limit = parseInt(limitVal, 10);
     return result;
@@ -246,7 +262,7 @@ export async function query<T = any>(sql: string, params: any[] = []): Promise<T
       console.warn('MongoDB: Could not parse SQL, returning empty:', sql);
       return [];
     }
-    let cursor = mongoDb.collection(parsed.collection).find(parsed.filter);
+    let cursor = mongoDb.collection(parsed.collection).find(parsed.filter, parsed.projection ? { projection: parsed.projection } : undefined);
     if (parsed.sort) cursor = cursor.sort(parsed.sort);
     if (parsed.limit) cursor = cursor.limit(parsed.limit);
     const docs = await cursor.toArray();
@@ -931,7 +947,34 @@ async function seedDefaults() {
     }
   }
 
-  // Seed default system settings
-  await execute(`INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)`, ['web_attendance_enabled', 'true']);
-  await execute(`INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)`, ['identity_document_required', 'false']);
+  // Seed default system settings — check-then-insert keeps Mongo idempotent
+  // (INSERT OR IGNORE has no Mongo translation and would duplicate every boot).
+  for (const [key, value] of [
+    ['web_attendance_enabled', 'true'],
+    ['identity_document_required', 'false'],
+  ] as const) {
+    const existing = await getOne('SELECT * FROM system_settings WHERE key = ?', [key]);
+    if (!existing) {
+      await execute(`INSERT INTO system_settings (key, value) VALUES (?, ?)`, [key, value]);
+    }
+  }
+
+  // One-time cleanup: collapse duplicate keys (legacy seeding created repeats).
+  if (isMongoActive() && mongoDb) {
+    try {
+      const dupes = await mongoDb.collection('system_settings').aggregate([
+        { $group: { _id: '$key', ids: { $push: '$_id' }, count: { $sum: 1 } } },
+        { $match: { count: { $gt: 1 } } },
+      ]).toArray();
+      for (const d of dupes) {
+        const removeIds = d.ids.slice(1); // keep the first document
+        if (removeIds.length) {
+          await mongoDb.collection('system_settings').deleteMany({ _id: { $in: removeIds } });
+          console.log(`System settings: removed ${removeIds.length} duplicate row(s) for key "${d._id}"`);
+        }
+      }
+    } catch (e) {
+      console.warn('System settings dedupe skipped:', (e as Error).message);
+    }
+  }
 }

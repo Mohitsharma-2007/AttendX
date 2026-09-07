@@ -76,6 +76,10 @@ export function generateNoticeTrackingId(): string {
   return `ATX-S-${rand}`;
 }
 
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
 function noticeEmailHtml(title: string, rows: Array<[string, string]>, body?: string): string {
   return `
     <!DOCTYPE html>
@@ -136,7 +140,7 @@ export async function handleNoticeCatalog(_req: Request, res: Response) {
 export async function handleRaiseNotice(req: Request, res: Response) {
   try {
     const user = (req as any).user;
-    const { type, subject, message, audience, targetEmail } = req.body || {};
+    const { type, subject, message, audience, targetEmail, recipientEmails } = req.body || {};
     const def = typeDef(String(type || ''));
     if (!def) {
       res.status(400).json({ error: 'Unknown notice type' });
@@ -164,6 +168,10 @@ export async function handleRaiseNotice(req: Request, res: Response) {
         : await query(`SELECT email FROM profiles WHERE is_active = 1 AND role = ? AND email IS NOT NULL AND email != ''`, [roleFilter]);
       finalAudience = roleFilter;
       recipients = rows.map((r: any) => r.email).filter(Boolean);
+    } else if (isAdmin && Array.isArray(recipientEmails) && recipientEmails.length) {
+      // Explicit recipient list from the Mail Center picker
+      recipients = unique(recipientEmails.map((e: unknown) => String(e).trim().toLowerCase()).filter(Boolean)).slice(0, 200);
+      finalAudience = 'selected';
     } else if (isAdmin && targetEmail) {
       recipients = [String(targetEmail).trim().toLowerCase()];
       finalAudience = 'targeted';

@@ -2621,18 +2621,48 @@ function PasswordResetManager({
 }
 
 export function PeopleView() {
-  const result = useLoad(
-    [] as any[],
-    () => rows<any>(supabase.from("profiles").select("*").order("full_name")),
-    [],
-  );
+  const [people, setPeople] = useState<any[]>([]);
+  const [peopleLoading, setPeopleLoading] = useState(true);
+  const [peopleError, setPeopleError] = useState("");
   const [query, setQuery] = useState(""),
     [busy, setBusy] = useState("");
-  const filtered = result.data.filter((person) =>
-    `${person.full_name} ${person.email} ${person.identifier}`
+  const [roleFilter, setRoleFilter] = useState("all"),
+    [departmentFilter, setDepartmentFilter] = useState("all"),
+    [batchFilter, setBatchFilter] = useState("all");
+
+  const loadPeople = async () => {
+    setPeopleLoading(true);
+    setPeopleError("");
+    try {
+      const token = localStorage.getItem("attendx_auth_token") || "";
+      const res = await fetch(`${getLocalServerUrl()}/api/admin/directory`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load the directory");
+      setPeople(Array.isArray(data.users) ? data.users : []);
+    } catch (err) {
+      setPeopleError((err as Error).message);
+      // Fallback: plain profile list so the page still works offline
+      const fallback = await rows<any>(supabase.from("profiles").select("*").order("full_name"));
+      setPeople(fallback);
+    }
+    setPeopleLoading(false);
+  };
+
+  useEffect(() => { void loadPeople(); }, []);
+
+  const departmentsList = [...new Set(people.map((p) => p.department).filter(Boolean))].sort();
+  const batchesList = [...new Set(people.flatMap((p: any) => (p.batches_label || "").split(", ")).filter(Boolean))].sort();
+
+  const filtered = people.filter((person) => {
+    if (roleFilter !== "all" && person.role !== roleFilter) return false;
+    if (departmentFilter !== "all" && (person.department || "") !== departmentFilter) return false;
+    if (batchFilter && !(person.batches_label || "").includes(batchFilter)) return false;
+    return `${person.full_name} ${person.email} ${person.identifier} ${person.batches_label || ""} ${person.year || ""}`
       .toLowerCase()
-      .includes(query.toLowerCase()),
-  );
+      .includes(query.toLowerCase());
+  });
   const toggle = async (person: any) => {
     setBusy(person.id);
     // Dedicated endpoint fires the activation/deactivation mail automatically.
@@ -2651,7 +2681,7 @@ export function PeopleView() {
         .eq("id", person.id);
     }
     setBusy("");
-    result.reload();
+    void loadPeople();
   };
   return (
     <>
@@ -2660,20 +2690,34 @@ export function PeopleView() {
         title="People"
         description="Accounts and profile details stored in the AttendX database."
       />
-      <div className="filter-row">
-        <div className="search-input search-wide">
+      <div className="filter-row" style={{ display: "flex", gap: ".6rem", flexWrap: "wrap" }}>
+        <div className="search-input search-wide" style={{ flex: 1, minWidth: "220px" }}>
           <Search size={17} />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search name, email, or ID"
+            placeholder="Search name, email, enrollment no, batch…"
           />
         </div>
+        <select className="text-input" style={{ width: "150px", height: "42px" }} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+          <option value="all">All roles</option>
+          <option value="student">Students</option>
+          <option value="faculty">Faculty</option>
+          <option value="admin">Admins</option>
+        </select>
+        <select className="text-input" style={{ width: "180px", height: "42px" }} value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>
+          <option value="all">All departments</option>
+          {departmentsList.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <select className="text-input" style={{ width: "170px", height: "42px" }} value={batchFilter} onChange={(e) => setBatchFilter(e.target.value)}>
+          <option value="all">All batches</option>
+          {batchesList.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
       </div>
       <section className="panel table-panel">
         <DataState
-          loading={result.loading}
-          error={result.error}
+          loading={peopleLoading}
+          error={peopleError}
           empty={!filtered.length}
         >
           <div className="table-scroll">
@@ -2681,8 +2725,12 @@ export function PeopleView() {
               <thead>
                 <tr>
                   <th>Person</th>
+                  <th>Email</th>
+                  <th>Enrollment no</th>
+                  <th>Department</th>
                   <th>Role</th>
-                  <th>Identifier</th>
+                  <th>Classes</th>
+                  <th>Batch / Year</th>
                   <th>Status</th>
                   <th>Action</th>
                 </tr>
@@ -2695,16 +2743,25 @@ export function PeopleView() {
                         <Initials name={person.full_name} />
                         <span>
                           <strong>{person.full_name}</strong>
-                          <small>{person.email}</small>
                         </span>
                       </div>
                     </td>
+                    <td style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <a href={`mailto:${person.email}`} style={{ color: "var(--blue)", textDecoration: "none" }}>{person.email}</a>
+                    </td>
+                    <td>{person.identifier || "—"}</td>
+                    <td>{person.department || "—"}</td>
                     <td>
                       <span className={`role-text role-${person.role}`}>
                         {person.role}
                       </span>
                     </td>
-                    <td>{person.identifier}</td>
+                    <td style={{ maxWidth: "180px", fontSize: "11px", color: "var(--muted)" }}>
+                      {person.classes?.length ? person.classes.join(", ") : "—"}
+                    </td>
+                    <td style={{ maxWidth: "170px", fontSize: "11px", color: "var(--muted)" }}>
+                      {person.batches_label || "—"}{person.year ? <><br /><span style={{ color: "var(--green)", fontWeight: 700 }}>{person.year}</span></> : null}
+                    </td>
                     <td>
                       {person.is_active ? (
                         <span className="active-status">
@@ -2909,6 +2966,16 @@ export function SettingsView() {
       ),
     [result.data],
   );
+  // Legacy seeding could duplicate keys — render each setting once.
+  const unique = useMemo(
+    () =>
+      Object.values(
+        Object.fromEntries(
+          (result.data as any[]).slice().reverse().map((item) => [item.key, item]),
+        ),
+      ) as any[],
+    [result.data],
+  );
   const save = async () => {
     setSaving(true);
     setMessage("");
@@ -2958,30 +3025,45 @@ export function SettingsView() {
         error={result.error}
         empty={!result.data.length}
       >
-        <div className="settings-grid">
-          {result.data.map((item) => {
+        <div className="panel settings-panel-new">
+          <div className="panel-head">
+            <div>
+              <p className="eyebrow">Configuration</p>
+              <h2>Institution preferences</h2>
+            </div>
+            <span className="settings-count">{unique.length} setting{unique.length === 1 ? "" : "s"}</span>
+          </div>
+          {unique.map((item, index) => {
             const isBoolean = /^(true|false)$/i.test(String(values[item.key] ?? item.value));
+            const title = item.key
+              .replaceAll("_", " ")
+              .replace(/\b\w/g, (c: string) => c.toUpperCase());
             return (
-              <label className="panel setting-row" key={item.key}>
-                <span>
-                  <strong>{item.key.replaceAll("_", " ")}</strong>
-                  <small>{item.description}</small>
-                </span>
+              <div className={`setting-row-new ${index % 2 ? "odd" : ""}`} key={item.key}>
+                <div className="setting-row-new-text">
+                  <strong>{title}</strong>
+                  <small>{item.description || `Controls the ${title.toLowerCase()} behaviour across AttendX.`}</small>
+                </div>
                 {isBoolean ? (
-                  <input
-                    type="checkbox"
-                    className="toggle"
-                    checked={String(values[item.key] ?? item.value).toLowerCase() === 'true'}
-                    onChange={(event) =>
-                      setValues((current) => ({
-                        ...current,
-                        [item.key]: event.target.checked ? 'true' : 'false',
-                      }))
-                    }
-                  />
+                  <label className="toggle-wrap">
+                    <input
+                      type="checkbox"
+                      className="toggle"
+                      checked={String(values[item.key] ?? item.value).toLowerCase() === "true"}
+                      onChange={(event) =>
+                        setValues((current) => ({
+                          ...current,
+                          [item.key]: event.target.checked ? "true" : "false",
+                        }))
+                      }
+                    />
+                    <span className="toggle-state" data-on={String(values[item.key] ?? item.value).toLowerCase() === "true"}>
+                      {String(values[item.key] ?? item.value).toLowerCase() === "true" ? "Enabled" : "Disabled"}
+                    </span>
+                  </label>
                 ) : (
                   <input
-                    className="text-input settings-input"
+                    className="text-input settings-input-new"
                     value={values[item.key] ?? ""}
                     onChange={(event) =>
                       setValues((current) => ({
@@ -2991,7 +3073,7 @@ export function SettingsView() {
                     }
                   />
                 )}
-              </label>
+              </div>
             );
           })}
         </div>

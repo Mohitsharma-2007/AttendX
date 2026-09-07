@@ -11,6 +11,7 @@ const supabase = apiClient
 import { CameraCaptureModal, captureNativePhoto, type LivePhoto } from './components/CameraCapture'
 import { extractJoinToken, QrScannerModal } from './components/QrScanner'
 import { OtpModal } from './components/OtpModal'
+import { Landing } from './components/Landing'
 import { isNativeApp } from './lib/platform'
 import { UpdateBanner } from './components/UpdateBanner'
 
@@ -82,7 +83,7 @@ function CaptureTile({ title, icon, photo, onClick }: { title: string; icon: Rea
   return <button type="button" className={`capture-tile ${photo ? 'captured' : ''}`} onClick={onClick}>{photo ? <img src={photo.dataUrl} alt={title}/> : icon}<strong>{photo ? 'Retake' : title}</strong>{photo && <small>Captured live</small>}</button>
 }
 
-function Login() {
+function Login({ onBack }: { onBack?: () => void }) {
   const signIn = useAppStore((state) => state.signIn)
   const [nativeApp, setNativeApp] = useState(isNativeApp)
   const [role, setRole] = useState<Role>('student')
@@ -171,6 +172,7 @@ function Login() {
 
   if (signupMode) return <Signup onBack={() => setSignupMode(false)}/>
   return <main className="login-page">
+    {onBack && <button type="button" className="back-link" style={{ alignSelf: 'flex-start' }} onClick={onBack}><ArrowLeft size={16} />Back to home</button>}
     <section className="login-brand">
       <div className="login-brand-inner">
         <Logo />
@@ -381,6 +383,7 @@ export function App() {
   const { authenticated, authLoading, bootstrap, profile } = useAppStore()
   const [developerModeBlocked, setDeveloperModeBlocked] = useState(false)
   const [checkingDevMode, setCheckingDevMode] = useState(false)
+  const [landingOpen, setLandingOpen] = useState(true)
 
   const verifyDevMode = async () => {
     setCheckingDevMode(true)
@@ -483,7 +486,9 @@ export function App() {
   }
 
   if (authLoading) return <div className="app-loading"><Logo/><LoaderCircle className="spin"/></div>
-  if (!authenticated) return <Login />
+  if (!authenticated) return landingOpen
+    ? <Landing onLaunch={() => setLandingOpen(false)} />
+    : <Login onBack={() => setLandingOpen(true)} />
   if (profile.must_change_password) return <PasswordChangeRequired />
   if (profile.role === 'faculty' && profile.approval_status === 'pending') return <FacultyPendingApproval />
   if (profile.role === 'faculty' && profile.approval_status === 'approved_waiting_code') return <FacultyCodeEntry />

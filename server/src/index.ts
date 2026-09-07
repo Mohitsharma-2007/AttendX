@@ -117,6 +117,10 @@ app.post(['/api/functions/admin-update-attendance', '/functions/v1/admin-update-
 
 // Faculty approval & verification lifecycle
 app.get('/api/faculty/pending', authenticate, handleListPendingFaculty);
+
+// Admin user directory (People page + Mail Center recipient picker)
+import { handleDirectory } from './directory.js';
+app.get('/api/admin/directory', authenticate, handleDirectory);
 app.post('/api/faculty/approve', authenticate, handleApproveFaculty);
 
 // Attendance query / complaint system with tracking numbers

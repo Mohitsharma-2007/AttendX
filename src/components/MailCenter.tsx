@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle, Bug, CheckCircle2, ClipboardList, Copy, Inbox, KeyRound, LifeBuoy,
   LoaderCircle, Mail, MessageSquareWarning, RefreshCw, Search, Send, ServerOff,
-  Smartphone, UserCheck, UserPlus, UserX, Wrench,
+  Smartphone, UserCheck, UserPlus, UserX, Users, Wrench,
 } from 'lucide-react'
 import { Button } from './ui'
 import { useAppStore } from '../store'
@@ -22,6 +22,10 @@ type Notice = {
   status: string; audience: string; sender_name: string; sender_email: string
   target_email: string | null; emailed: number | boolean; admin_note: string
   created_at: string; updated_at: string
+}
+type DirectoryUser = {
+  id: string; full_name: string; email: string; identifier: string; department: string
+  role: string; is_active: boolean; classes: string[]; batches_label: string; year: string
 }
 
 const ICONS: Record<string, typeof Mail> = {
@@ -63,6 +67,8 @@ export function MailCenter() {
 
   const [types, setTypes] = useState<NoticeType[]>([])
   const [smtpUp, setSmtpUp] = useState(true)
+  const [catalogLoaded, setCatalogLoaded] = useState(false)
+  const [catalogRetrying, setCatalogRetrying] = useState(false)
   const [notices, setNotices] = useState<Notice[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'compose' | 'history'>('compose')
@@ -77,6 +83,17 @@ export function MailCenter() {
   const [sending, setSending] = useState(false)
   const [sentResult, setSentResult] = useState<{ ok: boolean; text: string; trackingId?: string } | null>(null)
 
+  // Recipient picker (admin)
+  const [directory, setDirectory] = useState<DirectoryUser[]>([])
+  const [directoryLoading, setDirectoryLoading] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [selectedEmails, setSelectedEmails] = useState<string[]>([])
+  const [dirRole, setDirRole] = useState('student')
+  const [dirDepartment, setDirDepartment] = useState('')
+  const [dirBatch, setDirBatch] = useState('')
+  const [dirYear, setDirYear] = useState('')
+  const [dirQuery, setDirQuery] = useState('')
+
   // Resolve state (admin)
   const [resolving, setResolving] = useState('')
   const [noteFor, setNoteFor] = useState('')
@@ -86,17 +103,33 @@ export function MailCenter() {
 
   const activeType = types.find((t) => t.type === type)
 
-  const loadCatalog = async () => {
+  const fetchCatalog = async (): Promise<boolean> => {
     try {
       const res = await fetch(apiUrl('/api/notices/catalog'), { headers: authHeaders() })
+      if (!res.ok) return false
       const data = await res.json()
-      const all: NoticeType[] = data.types || []
+      if (!Array.isArray(data.types)) return false
+      const all: NoticeType[] = data.types
       setTypes(isAdmin ? all : all.filter((t) => t.audience === 'system'))
       setSmtpUp(Boolean(data.smtpConfigured))
       setType((current) => current || (isAdmin ? all[0]?.type : all.find((t) => t.audience === 'system')?.type) || '')
+      return true
     } catch {
-      setTypes([])
+      return false
     }
+  }
+
+  // Resilient load: auto-retry up to 3 times so a cold start or a transient
+  // network blip never leaves the center stuck on "offline".
+  const loadCatalog = async () => {
+    setCatalogRetrying(true)
+    let ok = false
+    for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+      ok = await fetchCatalog()
+      if (!ok && attempt < 2) await new Promise((r) => setTimeout(r, 900))
+    }
+    setCatalogLoaded(ok)
+    setCatalogRetrying(false)
   }
 
   const loadNotices = async (tracking = '') => {
@@ -112,10 +145,62 @@ export function MailCenter() {
     setLoading(false)
   }
 
+  const loadDirectory = async () => {
+    setDirectoryLoading(true)
+    try {
+      const res = await fetch(apiUrl('/api/admin/directory'), { headers: authHeaders() })
+      const data = await res.json()
+      setDirectory(Array.isArray(data.users) ? data.users : [])
+    } catch {
+      setDirectory([])
+    }
+    setDirectoryLoading(false)
+  }
+
   useEffect(() => {
     void loadCatalog()
     void loadNotices()
   }, [])
+
+  useEffect(() => {
+    if (isAdmin && pickerOpen && directory.length === 0) void loadDirectory()
+  }, [isAdmin, pickerOpen])
+
+  const filteredDirectory = useMemo(() => {
+    const needle = dirQuery.trim().toLowerCase()
+    return directory.filter((u) => {
+      if (u.role !== dirRole) return false
+      if (dirDepartment && (u.department || '').toLowerCase() !== dirDepartment.toLowerCase()) return false
+      if (dirBatch && !u.batches_label.toLowerCase().includes(dirBatch.toLowerCase())) return false
+      if (dirYear && (u.year || '').toLowerCase() !== dirYear.toLowerCase()) return false
+      if (needle && !`${u.full_name} ${u.email} ${u.identifier}`.toLowerCase().includes(needle)) return false
+      return true
+    })
+  }, [directory, dirRole, dirDepartment, dirBatch, dirYear, dirQuery])
+
+  const departments = useMemo(
+    () => [...new Set(directory.map((u) => u.department).filter(Boolean))].sort(),
+    [directory],
+  )
+  const batchesList = useMemo(
+    () => [...new Set(directory.flatMap((u) => u.batches_label.split(', ').filter(Boolean)))].sort(),
+    [directory],
+  )
+  const yearsList = useMemo(
+    () => [...new Set(directory.map((u) => u.year).filter(Boolean))].sort(),
+    [directory],
+  )
+
+  const toggleEmail = (email: string) => {
+    setSelectedEmails((cur) => (cur.includes(email) ? cur.filter((e) => e !== email) : [...cur, email]))
+  }
+  const toggleVisible = () => {
+    const visible = filteredDirectory.map((u) => u.email).filter(Boolean)
+    const allSelected = visible.every((e) => selectedEmails.includes(e))
+    setSelectedEmails((cur) =>
+      allSelected ? cur.filter((e) => !visible.includes(e)) : [...new Set([...cur, ...visible])],
+    )
+  }
 
   const send = async () => {
     if (!type || !message.trim()) {
@@ -128,8 +213,13 @@ export function MailCenter() {
       const body: Record<string, unknown> = { type, subject: subject.trim(), message: message.trim() }
       if (isAdmin) {
         const def = types.find((t) => t.type === type)
-        if (def?.audience === 'users') body.audience = audience
-        else if (def?.audience === 'targeted' && targetEmail.trim()) body.targetEmail = targetEmail.trim()
+        if (selectedEmails.length > 0) {
+          body.recipientEmails = selectedEmails
+        } else if (def?.audience === 'users') {
+          body.audience = audience
+        } else if (def?.audience === 'targeted' && targetEmail.trim()) {
+          body.targetEmail = targetEmail.trim()
+        }
       }
       const res = await fetch(apiUrl('/api/notices'), { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) })
       const data = await res.json()
@@ -146,6 +236,7 @@ export function MailCenter() {
       setSubject('')
       setMessage('')
       setTargetEmail('')
+      setSelectedEmails([])
       void loadNotices()
     } catch (err) {
       setSentResult({ ok: false, text: (err as Error).message })
@@ -169,6 +260,8 @@ export function MailCenter() {
     setTimeout(() => setCopied(''), 1600)
   }
 
+  const selectStyle: React.CSSProperties = { flex: 1, minWidth: '150px', height: '40px' }
+
   return (
     <div className="page">
       <header className="page-head" style={{ marginBottom: '1.25rem' }}>
@@ -178,7 +271,7 @@ export function MailCenter() {
             ? 'Compose official notices, broadcast app updates, and resolve every incoming request — all over Gmail SMTP with full tracking.'
             : 'Raise service requests, complaints, and reports to the administration. Every request gets a tracking number and email updates.'}
         </p>
-        {!smtpUp && (
+        {catalogLoaded && !smtpUp && (
           <div style={{ marginTop: '.6rem', padding: '.55rem .9rem', borderRadius: 6, background: 'rgba(185,121,25,.12)', color: '#b97919', fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.45rem' }}>
             <AlertCircle size={15} /> SMTP is not configured on the server — requests are tracked but emails cannot be delivered.
           </div>
@@ -200,15 +293,22 @@ export function MailCenter() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '.6rem' }}><Mail size={20} /><h2>{isAdmin ? 'New mail / notice' : 'New request'}</h2></div>
           </div>
 
-          {types.length === 0 && (
-            <div className="data-state" style={{ minHeight: '120px' }}>
-              <AlertCircle size={22} />
-              <strong>Mail Center is offline</strong>
+          <div className="panel-body">
+          {!catalogLoaded && (
+            <div className="data-state" style={{ minHeight: '140px' }}>
+              {catalogRetrying
+                ? <LoaderCircle className="spin" size={22} />
+                : <AlertCircle size={22} />}
+              <strong>{catalogRetrying ? 'Connecting to the AttendX server…' : 'Mail Center is offline'}</strong>
               <span>Connect to the AttendX server (Profile → Server connection) to load the mail categories.</span>
-              <Button variant="secondary" onClick={() => void loadCatalog()}><RefreshCw size={15} /> Retry</Button>
+              <Button variant="secondary" onClick={() => void loadCatalog()} disabled={catalogRetrying}>
+                <RefreshCw size={15} /> {catalogRetrying ? 'Retrying…' : 'Retry'}
+              </Button>
             </div>
           )}
 
+          {catalogLoaded && (
+            <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '.6rem', marginBottom: '1.1rem' }}>
             {types.map((t) => {
               const Icon = ICONS[t.icon] || Mail
@@ -239,7 +339,7 @@ export function MailCenter() {
               <input className="text-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder={activeType ? activeType.label : 'Subject'} />
             </label>
 
-            {isAdmin && activeType?.audience === 'users' && (
+            {isAdmin && activeType?.audience === 'users' && selectedEmails.length === 0 && (
               <label className="field-label" style={{ marginBottom: 0 }}>
                 Audience
                 <select className="text-input" value={audience} onChange={(e) => setAudience(e.target.value)}>
@@ -250,7 +350,7 @@ export function MailCenter() {
               </label>
             )}
 
-            {isAdmin && activeType?.audience === 'targeted' && (
+            {isAdmin && activeType?.audience === 'targeted' && selectedEmails.length === 0 && (
               <label className="field-label" style={{ marginBottom: 0 }}>
                 Recipient email
                 <input className="text-input" type="email" value={targetEmail} onChange={(e) => setTargetEmail(e.target.value)} placeholder="user@college.edu" />
@@ -271,10 +371,92 @@ export function MailCenter() {
             <div>
               <Button onClick={send} disabled={sending}>
                 {sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
-                {sending ? 'Sending…' : isAdmin ? 'Send mail' : 'Submit request'}
+                {sending ? 'Sending…' : isAdmin ? `Send mail${selectedEmails.length ? ` to ${selectedEmails.length} selected` : ''}` : 'Submit request'}
               </Button>
             </div>
           </div>
+
+          {/* Recipient directory picker (admin) */}
+          {isAdmin && (
+            <div style={{ marginTop: '1.25rem', border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
+              <button
+                onClick={() => setPickerOpen((v) => !v)}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '.6rem', padding: '14px 18px', background: '#fafcfb', border: 0, cursor: 'pointer', fontSize: '.92rem', fontWeight: 700, color: 'var(--ink)' }}
+              >
+                <Users size={18} color="var(--green)" />
+                Recipients directory — pick students or faculty by department, batch, year or enrollment no
+                <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: '.8rem', fontWeight: 500 }}>
+                  {selectedEmails.length ? `${selectedEmails.length} selected` : 'optional'}
+                </span>
+              </button>
+
+              {pickerOpen && (
+                <div style={{ padding: '16px 18px', borderTop: '1px solid var(--line)' }}>
+                  <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.8rem' }}>
+                    <select className="text-input" style={selectStyle} value={dirRole} onChange={(e) => setDirRole(e.target.value)}>
+                      <option value="student">Students</option>
+                      <option value="faculty">Faculty</option>
+                      <option value="admin">Admins</option>
+                    </select>
+                    <select className="text-input" style={selectStyle} value={dirDepartment} onChange={(e) => setDirDepartment(e.target.value)}>
+                      <option value="">All departments</option>
+                      {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    <select className="text-input" style={selectStyle} value={dirBatch} onChange={(e) => setDirBatch(e.target.value)}>
+                      <option value="">All batches</option>
+                      {batchesList.map((b) => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                    <select className="text-input" style={selectStyle} value={dirYear} onChange={(e) => setDirYear(e.target.value)}>
+                      <option value="">All years</option>
+                      {yearsList.map((y) => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', gap: '.5rem', marginBottom: '.8rem' }}>
+                    <div className="search-input" style={{ flex: 1 }}>
+                      <Search size={15} />
+                      <input value={dirQuery} onChange={(e) => setDirQuery(e.target.value)} placeholder="Search name, email or enrollment no…" />
+                    </div>
+                    <Button variant="secondary" onClick={toggleVisible}>
+                      {filteredDirectory.every((u) => selectedEmails.includes(u.email)) && filteredDirectory.length ? 'Clear visible' : 'Select visible'}
+                    </Button>
+                  </div>
+
+                  {directoryLoading ? (
+                    <div className="data-state" style={{ minHeight: '90px' }}><LoaderCircle className="spin" size={20} /><strong>Loading directory…</strong></div>
+                  ) : filteredDirectory.length === 0 ? (
+                    <div className="small-empty">No {dirRole}s match these filters.</div>
+                  ) : (
+                    <div style={{ maxHeight: '320px', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
+                      {filteredDirectory.map((u) => (
+                        <label key={u.id} style={{ display: 'flex', alignItems: 'center', gap: '.7rem', padding: '10px 14px', borderBottom: '1px solid #eef2f0', cursor: 'pointer', fontSize: '.85rem' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedEmails.includes(u.email)}
+                            onChange={() => toggleEmail(u.email)}
+                            style={{ width: '16px', height: '16px', accentColor: 'var(--green)' }}
+                          />
+                          <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                            <strong style={{ color: 'var(--ink)' }}>{u.full_name}</strong>
+                            <small style={{ color: 'var(--muted)' }}>{u.email}{u.identifier ? ` · ${u.identifier}` : ''}{u.department ? ` · ${u.department}` : ''}</small>
+                          </span>
+                          <span style={{ marginLeft: 'auto', textAlign: 'right', color: 'var(--muted)', fontSize: '.72rem' }}>
+                            {u.batches_label || '—'}{u.year ? ` · ${u.year}` : ''}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <p style={{ margin: '.6rem 0 0', color: 'var(--muted)', fontSize: '.78rem' }}>
+                    {selectedEmails.length
+                      ? `${selectedEmails.length} recipient(s) selected — the mail goes only to them.`
+                      : 'No explicit selection — the mail follows the category default (administration inbox or full audience).'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+            </>
+          )}
 
           {sentResult && (
             <div style={{
@@ -294,6 +476,7 @@ export function MailCenter() {
               )}
             </div>
           )}
+          </div>
         </section>
       )}
 
@@ -303,7 +486,7 @@ export function MailCenter() {
             <div className="panel-head">
               <div style={{ display: 'flex', alignItems: 'center', gap: '.6rem' }}><Search size={18} /><h2>Track by request number</h2></div>
             </div>
-            <div style={{ display: 'flex', gap: '.6rem', flexWrap: 'wrap' }}>
+            <div className="panel-body" style={{ display: 'flex', gap: '.6rem', flexWrap: 'wrap' }}>
               <input
                 className="text-input"
                 style={{ flex: 1, minWidth: '220px' }}
